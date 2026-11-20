@@ -1,0 +1,1217 @@
+
+/* =========================
+   基本設定
+========================= */
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --background: #f4f7fb;
+  --surface: #ffffff;
+  --text: #26394c;
+  --subtext: #7b899a;
+  --primary: #438dd8;
+  --border: #e8edf3;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "Noto Sans JP", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+/* =========================
+   サイドバー
+========================= */
+
+.sidebar {
+  display: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 36px;
+}
+
+.brand-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  background: #dceafa;
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.brand p {
+  margin: 3px 0 0;
+  color: var(--subtext);
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+.side-nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-button {
+  border: 0;
+  background: transparent;
+  color: #738296;
+  border-radius: 12px;
+  padding: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-align: left;
+}
+
+.nav-button span {
+  font-size: 20px;
+}
+
+.nav-button.active {
+  background: #e8f2fc;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  color: var(--subtext);
+  font-size: 12px;
+}
+
+.sidebar-footer small {
+  display: block;
+  margin-top: 5px;
+}
+
+/* =========================
+   メイン画面
+========================= */
+
+.main-area {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 0 18px 100px;
+}
+
+.topbar {
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mobile-brand {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.mobile-brand span {
+  color: var(--primary);
+  margin-right: 5px;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.icon-button {
+  border: 0;
+  background: white;
+  border-radius: 12px;
+  width: 40px;
+  height: 40px;
+  font-size: 19px;
+  color: #718096;
+}
+
+.screen {
+  display: none;
+  padding-top: 20px;
+}
+
+.screen.active {
+  display: block;
+}
+
+.page-heading {
+  margin-bottom: 24px;
+}
+
+.page-heading h2 {
+  font-size: 27px;
+  margin: 5px 0;
+}
+
+.page-heading p {
+  color: var(--subtext);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  color: var(--primary) !important;
+  font-size: 10px !important;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+}
+
+/* =========================
+   新規作成カード
+========================= */
+
+.new-project-card {
+  padding: 23px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #eaf3fc, #f0f6fd);
+  margin-bottom: 32px;
+}
+
+.card-icon {
+  font-size: 30px;
+  color: var(--primary);
+}
+
+.new-project-card h3 {
+  font-size: 21px;
+  margin: 7px 0;
+}
+
+.new-project-card p:not(.eyebrow) {
+  color: #718096;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.primary-button {
+  border: 0;
+  background: var(--primary);
+  color: white;
+  border-radius: 12px;
+  padding: 13px 18px;
+  font-weight: 600;
+  margin-top: 10px;
+}
+
+.primary-button:active {
+  opacity: 0.8;
+}
+
+/* =========================
+   セクション
+========================= */
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 25px 0 14px;
+}
+
+.section-heading h3 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.text-button {
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-size: 13px;
+  padding: 8px;
+}
+
+/* =========================
+   履歴・楽譜カード
+========================= */
+
+.project-list {
+  display: grid;
+  gap: 12px;
+}
+
+.project-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  cursor: pointer;
+}
+
+.project-icon {
+  width: 43px;
+  height: 43px;
+  border-radius: 13px;
+  background: #eaf3fc;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.project-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-info h4 {
+  margin: 0 0 5px;
+  font-size: 14px;
+}
+
+.project-info p {
+  margin: 0;
+  color: var(--subtext);
+  font-size: 11px;
+}
+
+.project-status {
+  font-size: 10px;
+  color: #27855f;
+  background: #e9f7ef;
+  padding: 5px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+/* =========================
+   機能カード
+========================= */
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.feature-card {
+  border-radius: 17px;
+  padding: 17px;
+}
+
+.feature-card > span {
+  font-size: 23px;
+}
+
+.feature-card h4 {
+  margin: 10px 0 5px;
+  font-size: 13px;
+}
+
+.feature-card p {
+  color: var(--subtext);
+  font-size: 11px;
+  margin: 0;
+}
+
+.blue {
+  background: #edf5fd;
+}
+
+.green {
+  background: #edf7f3;
+}
+
+.orange {
+  background: #fbf5e9;
+}
+
+.purple {
+  background: #f4f0fa;
+}
+
+/* =========================
+   空の画面
+========================= */
+
+.empty-state {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 35px 18px;
+  text-align: center;
+}
+
+.empty-state > span {
+  font-size: 35px;
+  color: var(--primary);
+}
+
+.empty-state h3 {
+  font-size: 16px;
+}
+
+.empty-state p {
+  font-size: 12px;
+  color: var(--subtext);
+  line-height: 1.7;
+}
+
+/* =========================
+   設定画面
+========================= */
+
+.settings-list {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-item {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  padding: 15px;
+  border: 1px solid var(--border);
+  background: white;
+  border-radius: 14px;
+  color: var(--text);
+  text-align: left;
+}
+
+.settings-item > span:first-child {
+  font-size: 22px;
+}
+
+.settings-item div {
+  flex: 1;
+}
+
+.settings-item b,
+.settings-item small {
+  display: block;
+}
+
+.settings-item b {
+  font-size: 13px;
+}
+
+.settings-item small {
+  color: var(--subtext);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+/* =========================
+   読み込み画面
+========================= */
+
+.upload-area {
+  background: white;
+  border: 2px dashed #b8d3ed;
+  border-radius: 20px;
+  padding: 45px 20px;
+  text-align: center;
+}
+
+.upload-area > span {
+  font-size: 40px;
+  color: var(--primary);
+}
+
+.upload-area h3 {
+  font-size: 17px;
+}
+
+.upload-area p {
+  color: var(--subtext);
+  font-size: 12px;
+}
+
+.small-note {
+  font-size: 10px !important;
+}
+
+/* =========================
+   検索
+========================= */
+
+.search-input {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: white;
+  outline: none;
+  margin-bottom: 17px;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+}
+
+/* =========================
+   スマホ用下部メニュー
+========================= */
+
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 68px;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  z-index: 100;
+}
+
+.bottom-nav .nav-button {
+  flex: 1;
+  padding: 6px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+}
+
+.bottom-nav .nav-button span {
+  font-size: 20px;
+}
+
+.bottom-nav .nav-button small {
+  font-size: 10px;
+}
+
+/* =========================
+   iPad・広い画面
+========================= */
+
+@media (min-width: 768px) {
+  .app {
+    display: flex;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 225px;
+    min-width: 225px;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    padding: 28px 18px;
+    background: white;
+    border-right: 1px solid var(--border);
+  }
+
+  .bottom-nav {
+    display: none;
+  }
+
+  .mobile-brand {
+    display: none;
+  }
+
+  .main-area {
+    padding: 0 35px 50px;
+  }
+
+  .topbar {
+    height: 70px;
+  }
+
+  .screen {
+    padding-top: 25px;
+  }
+
+  .new-project-card {
+    padding: 30px;
+  }
+
+  .feature-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (min-width: 1100px) {
+  .sidebar {
+    width: 250px;
+    min-width: 250px;
+    padding: 32px 23px;
+  }
+}
+/* ファイル情報 */
+.file-information {
+  margin-top: 20px;
+  padding: 14px;
+  background: #f0f5f5;
+  border-radius: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.file-information p {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: #777;
+}
+
+.file-information strong {
+  font-size: 14px;
+}
+
+/* 楽譜プレビュー */
+.score-preview {
+  width: 100%;
+  margin-top: 20px;
+  background: #eee;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.score-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.score-preview iframe {
+  display: block;
+  width: 100%;
+  height: 650px;
+  border: none;
+  background: white;
+}
+
+.secondary-button {
+  margin-top: 12px;
+  padding: 11px 18px;
+  border: 1px solid #cbd6d6;
+  border-radius: 10px;
+  background: white;
+  color: #465b5b;
+  cursor: pointer;
+}
+
+#close-preview {
+  width: 100%;
+}
+
+@media (max-width: 767px) {
+  .score-preview iframe {
+    height: 500px;
+  }
+}
+
+/* 楽譜ファイル読み込み */
+
+#selected-file-info {
+  margin-top: 20px;
+  font-size: 14px;
+  color: #555;
+  overflow-wrap: anywhere;
+}
+
+#score-preview {
+  width: 100%;
+  margin-top: 20px;
+}
+
+#score-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+#score-preview iframe {
+  display: block;
+  width: 100%;
+  height: 75vh;
+  min-height: 500px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: white;
+}
+
+#score-preview .preview-message {
+  padding: 20px;
+  background: #f5f5f5;
+  border-radius: 10px;
+  color: #666;
+  text-align: center;
+}
+
+/* MusicXML読み込み結果 */
+
+#musicxml-result {
+  margin-top: 20px;
+  text-align: left;
+}
+
+.musicxml-part {
+  padding: 12px;
+  margin-top: 8px;
+  background: #f4f3fa;
+  border-radius: 8px;
+}
+
+.musicxml-part strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.musicxml-summary {
+  padding: 15px;
+  margin-bottom: 12px;
+  background: #eef7f1;
+  border-radius: 10px;
+}
+
+.musicxml-error {
+  padding: 12px;
+  background: #fff0f0;
+  color: #b42318;
+  border-radius: 8px;
+}
+
+/* PDF.jsのページ表示 */
+.pdf-page {
+  position: relative;
+  width: 100%;
+  margin: 0 auto 16px;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+/* PDF本体 */
+.pdf-page > canvas:not(.score-overlay) {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 分析マーカー */
+.pdf-page canvas.score-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 分析表示設定 */
+.analysis-layer-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  margin-top: 12px;
+  background: #f7f8fc;
+  border-radius: 12px;
+}
+
+.analysis-layer-settings label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.analysis-panel {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 16px;
+  background: #f5f8fc;
+  color: #27364a;
+}
+
+.analysis-panel h2 {
+  margin-top: 0;
+}
+
+.analysis-section {
+  margin-top: 20px;
+}
+
+.analysis-section h3 {
+  margin-bottom: 10px;
+}
+
+.analysis-item {
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #e2e9f1;
+}
+
+.analysis-item-title {
+  font-weight: 600;
+}
+
+.analysis-item-detail {
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.analysis-empty {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.analysis-panel {
+  margin-top: 20px;
+}
+
+.analysis-section {
+  margin-bottom: 24px;
+}
+
+.analysis-section h3 {
+  margin-bottom: 12px;
+}
+
+.analysis-item {
+  padding: 14px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #e2e9f1;
+}
+
+.analysis-item-title {
+  font-weight: 600;
+}
+
+.analysis-item-detail {
+  margin-top: 5px;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.analysis-empty {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.analysis-loading {
+  padding: 30px 20px;
+  text-align: center;
+  color: #64748b;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  border: 3px solid #dbe5f0;
+  border-top-color: #7098c8;
+  border-radius: 50%;
+  animation: analysis-spin 0.8s linear infinite;
+}
+
+@keyframes analysis-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =====================================
+   STEP 54：分析画面デザイン
+===================================== */
+
+.analysis-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.analysis-section {
+  padding: 20px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e7edf5;
+}
+
+.analysis-section h3 {
+  margin-top: 0;
+  color: #34445a;
+  font-size: 1.05rem;
+}
+
+.analysis-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border-radius: 12px;
+  background: #f6f9fd;
+  border: 1px solid #e8eef6;
+}
+
+.analysis-item:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-item-title {
+  color: #34445a;
+  font-weight: 700;
+}
+
+.analysis-item-detail {
+  color: #718096;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.analysis-empty {
+  padding: 14px;
+  color: #8a98aa;
+  font-size: 0.9rem;
+  background: #f7f9fc;
+  border-radius: 10px;
+}
+
+@media (max-width: 600px) {
+  .analysis-section {
+    padding: 15px;
+  }
+
+  .analysis-item {
+    padding: 12px;
+  }
+}
+
+/* STEP 55：役割ラベル */
+
+.analysis-role-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.analysis-role-tag {
+  display: inline-block;
+  padding: 5px 11px;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.role-melody {
+  color: #2865a8;
+  background: #e4f0ff;
+}
+
+.role-counter {
+  color: #7651a5;
+  background: #f0e8ff;
+}
+
+.role-bass {
+  color: #287d68;
+  background: #e2f5ed;
+}
+
+.role-rhythm {
+  color: #a36b25;
+  background: #fff1dc;
+}
+
+/* STEP 56：旋律の受け渡し表示 */
+
+.handoff-flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.handoff-part {
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: #eaf2ff;
+  color: #365f91;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.handoff-arrow {
+  color: #8a9bb2;
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+/* STEP 57：分析フィルター */
+
+.analysis-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+
+.analysis-filter label {
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.analysis-filter select {
+  width: 100%;
+  max-width: 320px;
+  padding: 11px 13px;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #34445a;
+  font-size: 0.95rem;
+}
+
+.analysis-role-tag.role-unknown {
+  background: #eeeeF2;
+  color: #666675;
+  border: 1px solid #d8d8e0;
+}
+
+/* =====================================
+   共通UI仕上げ
+===================================== */
+
+/* ボタンの操作感 */
+button {
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.15s ease,
+    opacity 0.2s ease;
+}
+
+/* キーボード操作時のフォーカス表示 */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(67, 141, 216, 0.35);
+  outline-offset: 3px;
+}
+
+/* メインボタン */
+.primary-button:hover {
+  background: #327dc5;
+}
+
+.primary-button:active {
+  transform: scale(0.98);
+}
+
+/* ナビゲーション */
+.nav-button {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.nav-button:hover {
+  background: #f0f5fb;
+}
+
+.nav-button.active:hover {
+  background: #e1eefb;
+}
+
+/* カード */
+.project-card,
+.settings-item,
+.feature-card,
+.new-project-card {
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.project-card:hover,
+.settings-item:hover {
+  border-color: #c9dced;
+  box-shadow: 0 4px 14px rgba(48, 91, 135, 0.07);
+}
+
+/* 押せないボタン */
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* スマホでのタップ時の青い選択表示を抑える */
+button,
+.project-card {
+  -webkit-tap-highlight-color: transparent;
+}
+
+
+/* MusicXML読み込みオプション */
+.musicxml-upload-option {
+  margin-top: 28px;
+  padding: 20px;
+  background: #f7faff;
+  border: 1px solid #dce9f7;
+  border-radius: 16px;
+  text-align: left;
+}
+
+.upload-option-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.upload-option-heading > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  background: #e5f0fc;
+  color: #438dd8;
+  border-radius: 11px;
+  font-size: 20px;
+}
+
+.upload-option-heading h3 {
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.upload-option-heading p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.musicxml-upload-option > button {
+  width: 100%;
+}
+
+/* =====================================
+   MusicXML読み込み欄
+===================================== */
+
+.musicxml-upload-option {
+  margin-top: 28px;
+  padding: 20px;
+  background: #f5f9fe;
+  border: 1px solid #dce9f6;
+  border-radius: 16px;
+  text-align: left;
+}
+
+.upload-option-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.upload-option-heading > span {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #e3effc;
+  color: #438dd8;
+  font-size: 22px;
+}
+
+.upload-option-heading h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.upload-option-heading p {
+  margin: 0;
+  color: #7b899a;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.musicxml-upload-option .secondary-button {
+  margin-top: 0;
+}
+
+/* =====================================
+   読み込み画面のスマホ表示
+===================================== */
+
+@media (max-width: 600px) {
+  .upload-area {
+    padding: 28px 14px;
+  }
+
+  .upload-area > .primary-button,
+  .musicxml-upload-option .secondary-button {
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .musicxml-upload-option {
+    padding: 16px;
+  }
+
+  .upload-option-heading {
+    gap: 10px;
+  }
+
+  .upload-option-heading h3 {
+    font-size: 15px;
+  }
+
+  .score-preview iframe {
+    height: 65vh;
+    min-height: 350px;
+  }
+}
