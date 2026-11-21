@@ -16841,11 +16841,14 @@ async function Pa(e, t = () => {}) {
 }
 // src/score-compass-engine.js
 async function Fa(e, t = () => {}) {
-	if (!e?.length) throw Error("楽譜ファイルが選択されていません。");
-	t("PDF・画像を読み込んでいます…");
-	let n = await Pa(e, (e) => {
-		t(`ページ ${e + 1} を準備しています…`);
-	}), r = new Worker(new URL(
+    if (!e?.length) throw Error("楽譜ファイルが選択されていません。");
+    t("PDF・画像を読み込んでいます…", 5);
+    let n = await Pa(e, (e) => {
+        t(`ページ ${e + 1} を準備しています…`, 10);
+    });
+    t("ページの準備が完了しました。認識を開始します…", 25);
+
+    let r = new Worker(new URL(
 		/* @vite-ignore */
 		new URL("assets/omr.worker-BTVskhNm.js", import.meta.url).href,
 		"" + import.meta.url
@@ -16859,7 +16862,7 @@ async function Fa(e, t = () => {}) {
 		), { type: "module" }).postMessage({ port: e.port1 }, [e.port1]), i = e.port2;
 	}
 	return new Promise((e, a) => {
-		let o = !1, s = () => {
+		let o = !1, d = 30, s = () => {
 			r.terminate(), i &&= (i.close(), null), n.forEach((e) => {
 				e.url && URL.revokeObjectURL(e.url);
 			});
@@ -16869,15 +16872,20 @@ async function Fa(e, t = () => {}) {
 			o || (o = !0, s(), a(e instanceof Error ? e : Error(String(e))));
 		};
 		r.onmessage = ({ data: e }) => {
-			if (e.type === "status") t(e.text);
-			else if (e.type === "log") t(e.text);
+			if (e.type === "status") {
+				d = Math.min(d + 7, 90);
+				t("楽譜の音符や記号を読み取っています…", d);
+			}
+			else if (e.type === "log") {
+				// 内部ログは画面に表示しない
+			}
 			else if (e.type === "error") l(Error(e.text));
 			else if (e.type === "result") {
 				if (!e.xml) {
 					l(/* @__PURE__ */ Error("MusicXMLを生成できませんでした。"));
 					return;
 				}
-				t("楽譜の認識が完了しました。"), c(e.xml);
+				t("楽譜の認識が完了しました。", 95), c(e.xml);
 			}
 		}, r.onerror = (e) => {
 			l(Error(e.message || "認識Workerでエラーが発生しました。"));

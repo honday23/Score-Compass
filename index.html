@@ -29,9 +29,6 @@
         <button class="nav-button" data-screen="score">
           <span>♫</span> 楽譜
         </button>
-        <button class="nav-button" data-screen="analysis">
-          <span>▤</span> 分析
-        </button>
         <button class="nav-button" data-screen="history">
           <span>◷</span> 履歴
         </button>
@@ -173,32 +170,33 @@
         <button class="secondary-button" id="close-preview" hidden>
           プレビューを閉じる
         </button>
-      </section>
 
-      <!-- 分析 -->
-      <section class="screen" id="analysis">
-        <div class="page-heading">
-          <p class="eyebrow">SCORE ANALYSIS</p>
-          <h2>分析</h2>
-          <p>楽譜の分析結果を確認する画面です。</p>
-        </div>
+        <!-- 分析の進捗 -->
         <div id="analysis-loading" class="analysis-loading" hidden>
-          <span class="loading-spinner"></span>
-          <p>楽譜を分析しています...</p>
+          <div class="analysis-loading-heading">
+            <span class="loading-spinner"></span>
+            <p>楽譜を準備しています…</p>
+            <strong id="analysis-progress-percent">0%</strong>
+          </div>
+
+          <div
+            class="analysis-progress-track"
+            role="progressbar"
+            aria-label="楽譜の分析進捗"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            id="analysis-progress-track"
+          >
+            <div id="analysis-progress-bar" class="analysis-progress-bar"></div>
+          </div>
         </div>
-        <section id="score-analysis-panel" class="analysis-panel" hidden>
+
+        <!-- 分析結果 -->
+        <div id="score-analysis-panel" hidden>
+
           <div class="analysis-section">
             <h3>パートごとの役割</h3>
-            <div class="analysis-filter">
-              <label for="part-role-filter">表示する役割</label>
-              <select id="part-role-filter">
-                <option value="all">すべて表示</option>
-                <option value="主旋律候補">主旋律</option>
-                <option value="対旋律候補">対旋律</option>
-                <option value="ベース候補">ベース</option>
-                <option value="リズム伴奏候補">リズム伴奏</option>
-              </select>
-            </div>
             <div id="part-role-list"></div>
           </div>
 
@@ -206,7 +204,8 @@
             <h3>旋律の受け渡し候補</h3>
             <div id="melody-handoff-list"></div>
           </div>
-        </section>
+
+        </div>
 
         <div class="empty-state" id="analysis-empty-state">
           <span>▤</span>
@@ -295,10 +294,10 @@
             <p>PDF・PNG・JPG形式の楽譜に対応しています</p>
 
             <input
-                type="file"
-                id="score-file-input"
-                accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-                hidden
+              type="file"
+              id="score-file-input"
+              accept=".pdf,.png,.jpg,.jpeg,.musicxml,.xml,application/pdf,image/png,image/jpeg,application/xml,text/xml"
+              hidden
             >
 
             <button class="primary-button" id="select-score-file">
@@ -309,92 +308,20 @@
                 選択したファイルは、このブラウザ内でプレビューします。
             </p>
 
-            <div id="file-information" class="file-information" hidden>
+            <div id="home-file-information" class="file-information" hidden>
                 <p>選択中のファイル</p>
-                <strong id="file-name"></strong>
+                <strong id="home-file-name"></strong>
             </div>
 
-            <div id="score-preview" class="score-preview" hidden></div>
-            <button id="toggle-analysis-layer" class="secondary-button" hidden>
-            分析結果を非表示
+            <div id="home-score-preview" class="score-preview" hidden></div>
+
+            <button class="primary-button" id="start-analysis" hidden>
+                分析開始
             </button>
-            <div id="analysis-layer-settings" class="analysis-layer-settings" hidden>
-                <h3>分析表示設定</h3>
 
-                <label>
-                    <input type="checkbox" data-layer="melody" checked>
-                    主旋律
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="countermelody" checked>
-                    対旋律
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="accompaniment" checked>
-                    伴奏
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="bass" checked>
-                    ベース
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="rhythm" checked>
-                    リズム・打楽器
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="arrows" checked>
-                    受け渡し
-                </label>
-
-                <label>
-                    <input type="checkbox" data-layer="comments" checked>
-                    コメント
-                </label>
-            </div>
-
-            <button class="secondary-button" id="close-preview" hidden>
+            <button class="secondary-button" id="home-close-preview" hidden>
                 プレビューを閉じる
             </button>
-
-            
-            <div class="musicxml-upload-option">
-                <div class="upload-option-heading">
-                    <span>♫</span>
-                    <div>
-                        <h3>MusicXMLから読み込む</h3>
-                        <p>MusicXML形式の楽譜データを直接読み込めます。</p>
-                    </div>
-                </div>
-
-                <input
-                    type="file"
-                    id="musicxml-file-input"
-                    accept=".musicxml,.xml"
-                    hidden
-                >
-
-                <button
-                    class="secondary-button"
-                    id="select-musicxml-file"
-                >
-                    MusicXMLファイルを選択
-                </button>
-
-                <div id="musicxml-result"></div>
-
-                <div id="musicxml-details" class="musicxml-details">
-                    <h3>楽譜データ</h3>
-                    <div id="musicxml-parts"></div>
-                </div>
-
-                <h3 hidden>音符データ詳細</h3>
-                <div id="musicxml-note-details" hidden></div>
-            </div>
 
             <hr>
 
@@ -417,9 +344,6 @@
       </button>
       <button class="nav-button" data-screen="score">
         <span>♫</span><small>楽譜</small>
-      </button>
-      <button class="nav-button" data-screen="analysis">
-        <span>▤</span><small>分析</small>
       </button>
       <button class="nav-button" data-screen="history">
         <span>◷</span><small>履歴</small>
