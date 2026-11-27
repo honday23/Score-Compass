@@ -2176,10 +2176,6 @@ function runMusicXMLAnalysis() {
   // この呼び出しがないと、分析結果があってもscoreAnnotationsが空のままになる。
   applyRoleAnnotationData();
 
-  console.log("[マーカー登録診断]", Object.fromEntries(
-    Object.entries(scoreAnnotations).map(([name, items]) => [name, items.length])
-  ));
-
   window.melodyHandoffs =
     detectMelodyHandoffs(
       window.scoreTimeline,
@@ -2485,13 +2481,11 @@ if (toggleAnalysisButton) {
 
 // 分析レイヤーの管理
 const analysisLayers = {
-  melody: {name:"主旋律", visible:true, color:"#F48FB1"},
-  harmony: {name:"ハモリ", visible:true, color:"#FFF176"},
-  countermelody: {name:"対旋律", visible:true, color:"#81D4FA"},
-  countermelody2: {name:"対旋律2", visible:true, color:"#A5D6A7"},
-  bass: {name:"ベース", visible:true, color:"#B39DDB"},
-  accompaniment: {name:"伴奏", visible:true, color:"#80CBC4"},
-  rhythm: {name:"リズム・打楽器", visible:true, color:"#BDBDBD"},
+  melody: {name:"主旋律", visible:true, color:"#FFD54F"},
+  countermelody: {name:"対旋律", visible:true, color:"#F28B82"},
+  bass: {name:"ベース", visible:true, color:"#81D4FA"},
+  accompaniment: {name:"伴奏", visible:true, color:"#81C995"},
+  rhythm: {name:"リズム・打楽器", visible:true, color:"#B39DDB"},
   arrows: {name:"受け渡し", visible:true, color:"#64B5F6"},
   comments: {name:"コメント", visible:true, color:"#777777"}
 };
@@ -2499,9 +2493,7 @@ const analysisLayers = {
 // 楽譜上に表示する分析結果の保存場所
 const scoreAnnotations = {
   melody: [],
-  harmony: [],
   countermelody: [],
-  countermelody2: [],
   bass: [],
   accompaniment: [],
   rhythm: [],
@@ -2520,9 +2512,6 @@ function addScoreAnnotation(layerName, annotation) {
     id: crypto.randomUUID(),
     page: annotation.page,
     partId: annotation.partId || null,
-    measureIndex: Number.isFinite(annotation.measureIndex)
-      ? annotation.measureIndex
-      : null,
     x: annotation.x,
     y: annotation.y,
     width: annotation.width || 16,
@@ -2545,23 +2534,13 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
       `.score-overlay[data-layer="${layerName}"]`
     );
 
-    if (!canvas) {
-      console.warn("[マーカー描画診断] overlay canvas が見つかりません:", {
-        pageNumber,
-        layerName,
-        selector: `.score-overlay[data-layer="${layerName}"]`
-      });
-      return;
-    }
+    if (!canvas) return;
 
     const context = canvas.getContext("2d");
 
     context.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (!analysisLayers[layerName].visible) {
-      console.log("[マーカー描画診断] レイヤー非表示:", layerName);
-      return;
-    }
+    if (!analysisLayers[layerName].visible) return;
 
     // Sheetscanの元画像サイズを取得
     const musicData =
@@ -2572,9 +2551,6 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
 
     const sourceWidth = pageLayout?.width || canvas.width;
     const sourceHeight = pageLayout?.height || canvas.height;
-
-    const pageAnnotations = scoreAnnotations[layerName]
-      .filter(item => item.page === pageNumber);
 
     // PDF表示サイズに合わせる倍率
     const scaleX = canvas.width / sourceWidth;
@@ -2607,7 +2583,7 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
       }));
     }
 
-    // 同じパート・同じ小節・同じ五線の音符をまとめる
+    // 同じパート・同じ五線の音符をグループ化
     const grouped = new Map();
 
     annotations.forEach(item => {
@@ -2636,63 +2612,50 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
 
       if (nearestIndex < 0) return;
 
-      const measureKey = item.measureIndex === null
-        ? `note-${item.x}`
-        : item.measureIndex;
-      const key = `${item.partId}_${nearestIndex}_${measureKey}`;
+      const key = `${item.partId}_${nearestIndex}`;
 
       if (!grouped.has(key)) {
         grouped.set(key, {
           staff: cachedStaffBoxes[nearestIndex],
-          items: [],
-          color: item.color
+          items: []
         });
       }
 
       grouped.get(key).items.push(item);
     });
 
-    // 小節内の音符位置をもとに、1小節につき1本の帯を描く
+    // 五線の内側を一定の高さで塗る
     context.globalAlpha = 0.28;
 
     grouped.forEach(group => {
-      const { staff, items, color } = group;
-      const xs = items.map(item => item.x);
-      const firstX = Math.min(...xs);
-      const lastX = Math.max(...xs);
+      const { staff, items } = group;
 
-      // 音符の少ない小節でも見えるよう、左右に少し余白を付ける
-      const startX = Math.max(staff.left, firstX - 18);
-      const endX = Math.min(staff.right, lastX + 18);
+      items.sort((a, b) => a.x - b.x);
 
-      if (endX <= startX) return;
+      items.forEach((item, index) => {
+        const next = items[index + 1];
 
-      context.fillStyle = color;
-      context.fillRect(
-        startX,
-        staff.top,
-        endX - startX,
-        staff.bottom - staff.top
-      );
-    });
+        const startX = Math.max(
+          staff.left,
+          item.x - 8
+        );
 
-    console.log("[マーカー描画診断]", {
-      pageNumber,
-      layerName,
-      registered: scoreAnnotations[layerName].length,
-      pageMatched: pageAnnotations.length,
-      canvas: { width: canvas.width, height: canvas.height },
-      pageLayout: pageLayout ? {
-        width: pageLayout.width,
-        height: pageLayout.height,
-        staffBoxesType: Array.isArray(pageLayout.staffBoxes) ? "array" : typeof pageLayout.staffBoxes,
-        staffBoxesCount: pageLayout.staffBoxes?.length || 0,
-        firstStaffBox: pageLayout.staffBoxes?.[0] || null
-      } : null,
-      scale: { scaleX, scaleY },
-      firstAnnotation: annotations[0] || null,
-      groupedCount: grouped.size,
-      firstGroupStaff: grouped.values().next().value?.staff || null
+        const endX = Math.min(
+          staff.right,
+          next ? next.x + 8 : item.x + 24
+        );
+
+        if (endX <= startX) return;
+
+        context.fillStyle = item.color;
+
+        context.fillRect(
+          startX,
+          staff.top,
+          endX - startX,
+          staff.bottom - staff.top
+        );
+      });
     });
 
     context.globalAlpha = 1;
@@ -3190,8 +3153,7 @@ function applyRoleAnnotationData() {
       partId: annotation.partId,
       x: annotation.x,
       y: annotation.y,
-      measureIndex: annotation.measureIndex,
-      text: ""
+      text: annotation.noteName || ""
     });
   });
 }
@@ -3578,7 +3540,7 @@ setAnalysisProgress("楽譜を読み込んでいます…");
 try {
 
   const { recognizeScoreFiles } =
-    await import("./engine/score-compass-engine.js");
+    await import("../engine/score-compass-engine.js");
 
   console.time("① OMR認識");
 

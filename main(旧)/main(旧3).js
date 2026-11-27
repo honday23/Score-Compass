@@ -3536,13 +3536,32 @@ setAnalysisProgress("楽譜を読み込んでいます…");
 try {
 
   const { recognizeScoreFiles } =
-    await import("./engine/score-compass-engine.js");
+    await import("../engine/score-compass-engine.js");
 
   console.time("① OMR認識");
 
-  const xml = await recognizeScoreFiles(files, (message, percent) => {
-    setAnalysisProgress(message, percent);
-  });
+  const xml = await recognizeScoreFiles(
+    files,
+    (message, percent) => {
+      setAnalysisProgress(message, percent);
+    },
+    ({ pageIndex, total, xml: partialXml }) => {
+      // The worker sends a cumulative MusicXML after each completed page.
+      // Analyze it immediately so already-read pages can receive provisional markers.
+      try {
+        musicXmlScoreData = parseMusicXML(partialXml);
+        runMusicXMLAnalysis();
+        console.log(
+          `ページ ${pageIndex + 1}/${total} までの暫定分析を表示しました。`
+        );
+      } catch (pageError) {
+        console.warn(
+          `ページ ${pageIndex + 1} の暫定分析を表示できませんでした。`,
+          pageError
+        );
+      }
+    }
+  );
 
   console.timeEnd("① OMR認識");
 

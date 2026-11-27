@@ -1725,11 +1725,13 @@ function rankMelodyCandidates(features, motionAnalysis) {
       Math.min(directionChangeRatio, 0.5) * 0.35 +
       (1 - Math.min(leapRatio, 1)) * 0.20;
 
-    const enoughContour = intervalCount >= 4;
+    // 小節単独では音程数が少なくなるため、短い輪郭も暫定候補として残す。
+    // 最終的な採用は、後段の複数小節フレーズ継続・他パートとの照合で補強する。
+    const enoughContour = intervalCount >= 2;
     const hasMelodicShape =
-      stepwiseRatio >= 0.35 || motion?.directionChanges >= 2;
+      stepwiseRatio >= 0.30 || motion?.directionChanges >= 1;
     const candidate = Boolean(
-      enoughContour && hasMelodicShape && score >= 0.48
+      enoughContour && hasMelodicShape && score >= 0.40
     );
 
     return {
@@ -2162,11 +2164,15 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
       window.melodicMotionAnalysis
     );
 
+  // 全パートのフレーズ類似・主題再現を先に横断評価し、役割判定へ渡す。
+  window.phraseRelationshipAnalysis = analyzePhraseRelationships(window.scoreTimeline);
+
   window.partRelationships =
     analyzePartRelationships(
       window.simultaneousAnalysis,
       window.melodyCandidates,
-      window.measureRoleResults
+      window.measureRoleResults,
+      window.phraseRelationshipAnalysis
     );
 
   window.counterMelodyAnalysis =
@@ -2193,14 +2199,16 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
       melodyCandidates: window.melodyCandidates,
       counterMelody: window.counterMelodyAnalysis,
       rhythmRelationships: window.rhythmRelationships,
-      events: window.scoreTimeline
+      events: window.scoreTimeline,
+      phraseAnalysis: window.phraseRelationshipAnalysis
     });
 
   // 全体分析を参考情報として残しつつ、小節ごとの役割を判定する。
   window.measureRoleResults = analyzeMeasureRoleResults(
     window.scoreTimeline,
     window.partFeatures,
-    window.partRoleResults
+    window.partRoleResults,
+    window.phraseRelationshipAnalysis
   );
 
   console.log("小節ごとの役割分析結果:", window.measureRoleResults);
@@ -2223,6 +2231,10 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
       staff: voice.staff,
       voice: voice.voice,
       roles: voice.roles,
+      noteCount: voice.noteCount,
+      restCount: voice.restCount,
+      candidateScores: voice.candidateScores,
+      roleEvidence: voice.roleEvidence,
       status: voice.status,
       reason: voice.reason
     }))
@@ -2254,7 +2266,8 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
     detectMelodyHandoffs(
       window.scoreTimeline,
       window.melodyCandidates,
-      window.measureRoleResults
+      window.measureRoleResults,
+      window.phraseRelationshipAnalysis
     );
 
   window.handoffDisplayData =
@@ -2608,6 +2621,87 @@ function addScoreAnnotation(layerName, annotation) {
   });
 }
 
+// STEP28: 同じ五線上で役割マーカーが重ならないよう、描画前に帯を統合・整理する。
+// 解析結果そのものは変更せず、表示用の帯だけを正規化する。
+function buildNonOverlappingRoleBands(pageNumber, pageLayout, scaleX, scaleY) {
+  const staffBoxes = (pageLayout?.staffBoxes || []).map(box => ({
+    top: box[1] * scaleY,
+    bottom: box[3] * scaleY,
+    left: box[0] * scaleX,
+    right: box[2] * scaleX
+  }));
+  if (!staffBoxes.length) return [];
+
+  const roleGroups = new Map();
+  Object.entries(scoreAnnotations).forEach(([layerName, items]) => {
+    if (!['melody','harmony','countermelody','countermelody2','bass','accompaniment','rhythm'].includes(layerName)) return;
+    items.filter(item => item.page === pageNumber).forEach(item => {
+      const x = Number(item.x) * scaleX;
+      const y = Number(item.y) * scaleY;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      let staffIndex = -1;
+      let nearest = Infinity;
+      staffBoxes.forEach((staff, index) => {
+        const distance = Math.abs(y - (staff.top + staff.bottom) / 2);
+        if (distance < nearest) { nearest = distance; staffIndex = index; }
+      });
+      if (staffIndex < 0) return;
+      const measureIndex = Number.isFinite(item.measureIndex) ? item.measureIndex : Math.round(x);
+      const key = `${item.partId || ''}|${staffIndex}|${measureIndex}|${layerName}`;
+      if (!roleGroups.has(key)) roleGroups.set(key, {
+        layerName, partId: item.partId || '', staffIndex, measureIndex,
+        staff: staffBoxes[staffIndex], xs: [], count: 0
+      });
+      const group = roleGroups.get(key);
+      group.xs.push(x);
+      group.count++;
+    });
+  });
+
+  const byMeasure = new Map();
+  roleGroups.forEach(group => {
+    const key = `${group.partId}|${group.staffIndex}|${group.measureIndex}`;
+    if (!byMeasure.has(key)) byMeasure.set(key, []);
+    byMeasure.get(key).push(group);
+  });
+
+  // 同じパート・五線・小節に複数役割が重なった場合、音符の支持数が最多の役割を表示する。
+  // 同数ならメロディー等の優先順位で決め、複数色の重ね塗りを避ける。
+  const rolePriority = ['melody','bass','harmony','countermelody','countermelody2','accompaniment','rhythm'];
+  const selected = [];
+  byMeasure.forEach(groups => {
+    groups.sort((a,b) => b.count - a.count || rolePriority.indexOf(a.layerName) - rolePriority.indexOf(b.layerName));
+    const winner = groups[0];
+    const firstX = Math.min(...winner.xs);
+    const lastX = Math.max(...winner.xs);
+    const startX = Math.max(winner.staff.left, firstX - 18);
+    const endX = Math.min(winner.staff.right, lastX + 18);
+    if (endX > startX) selected.push({ ...winner, startX, endX });
+  });
+
+  // 同じパート・五線の隣接小節の帯が余白で重なる場合、境界を中点にそろえる。
+  const byStaff = new Map();
+  selected.forEach(band => {
+    const key = `${band.partId}|${band.staffIndex}`;
+    if (!byStaff.has(key)) byStaff.set(key, []);
+    byStaff.get(key).push(band);
+  });
+  byStaff.forEach(bands => {
+    bands.sort((a,b) => a.measureIndex - b.measureIndex);
+    for (let i = 0; i < bands.length - 1; i++) {
+      const left = bands[i];
+      const right = bands[i + 1];
+      if (right.measureIndex === left.measureIndex) continue;
+      if (left.endX > right.startX) {
+        const boundary = (left.endX + right.startX) / 2;
+        left.endX = Math.max(left.startX, boundary);
+        right.startX = Math.min(right.endX, boundary);
+      }
+    }
+  });
+  return selected.filter(band => band.endX > band.startX);
+}
+
 // 保存された分析結果を楽譜上に帯状で描画する
 function renderScoreAnnotations(pageNumber, pageContainer) {
 
@@ -2651,6 +2745,9 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
 
     const sourceWidth = pageLayout?.width || canvas.width;
     const sourceHeight = pageLayout?.height || canvas.height;
+    const pageRoleBands = buildNonOverlappingRoleBands(
+      pageNumber, pageLayout, canvas.width / sourceWidth, canvas.height / sourceHeight
+    );
 
     const pageAnnotations = scoreAnnotations[layerName]
       .filter(item => item.page === pageNumber);
@@ -2686,72 +2783,17 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
       }));
     }
 
-    // 同じパート・同じ小節・同じ五線の音符をまとめる
-    const grouped = new Map();
-
-    annotations.forEach(item => {
-      if (!cachedStaffBoxes.length) return;
-
-      // 同じY座標の検索結果は再利用
-      const yKey = Math.round(item.y);
-      let nearestIndex = nearestStaffCache.get(yKey);
-
-      if (nearestIndex === undefined) {
-        let nearestDistance = Infinity;
-        nearestIndex = -1;
-
-        cachedStaffBoxes.forEach((staff, index) => {
-          const center = (staff.top + staff.bottom) / 2;
-          const distance = Math.abs(item.y - center);
-
-          if (distance < nearestDistance) {
-            nearestDistance = distance;
-            nearestIndex = index;
-          }
-        });
-
-        nearestStaffCache.set(yKey, nearestIndex);
-      }
-
-      if (nearestIndex < 0) return;
-
-      const measureKey = item.measureIndex === null
-        ? `note-${item.x}`
-        : item.measureIndex;
-      const key = `${item.partId}_${nearestIndex}_${measureKey}`;
-
-      if (!grouped.has(key)) {
-        grouped.set(key, {
-          staff: cachedStaffBoxes[nearestIndex],
-          items: [],
-          color: item.color
-        });
-      }
-
-      grouped.get(key).items.push(item);
-    });
-
-    // 小節内の音符位置をもとに、1小節につき1本の帯を描く
+    // STEP28: 全役割レイヤーを横断して整理済みの帯だけを描画する。
+    // 同じ場所への重ね塗りを避け、隣接小節の余白も境界で分割する。
     context.globalAlpha = 0.28;
-
-    grouped.forEach(group => {
-      const { staff, items, color } = group;
-      const xs = items.map(item => item.x);
-      const firstX = Math.min(...xs);
-      const lastX = Math.max(...xs);
-
-      // 音符の少ない小節でも見えるよう、左右に少し余白を付ける
-      const startX = Math.max(staff.left, firstX - 18);
-      const endX = Math.min(staff.right, lastX + 18);
-
-      if (endX <= startX) return;
-
-      context.fillStyle = color;
+    const bandsForLayer = pageRoleBands.filter(band => band.layerName === layerName);
+    bandsForLayer.forEach(band => {
+      context.fillStyle = analysisLayers[layerName].color;
       context.fillRect(
-        startX,
-        staff.top,
-        endX - startX,
-        staff.bottom - staff.top
+        band.startX,
+        band.staff.top,
+        band.endX - band.startX,
+        band.staff.bottom - band.staff.top
       );
     });
 
@@ -2770,8 +2812,7 @@ function renderScoreAnnotations(pageNumber, pageContainer) {
       } : null,
       scale: { scaleX, scaleY },
       firstAnnotation: annotations[0] || null,
-      groupedCount: grouped.size,
-      firstGroupStaff: grouped.values().next().value?.staff || null
+      renderedRoleBandCount: bandsForLayer.length
     });
 
     context.globalAlpha = 1;
@@ -3134,119 +3175,887 @@ function analyzeNonMelodyRoleEvidence(events, melodyCandidates) {
   return results;
 }
 
+// STEP18: 小節境界をまたぐフレーズを同じ時間軸で扱うための拍位置変換。
+// 休符も含む全イベントから各小節の長さを推定し、小節内拍を曲全体の通し拍へ変換する。
+function buildMeasureBeatOffsets(events) {
+  const measureLengths = new Map();
+  (events || []).forEach(event => {
+    if (!Number.isFinite(event.measureIndex) ||
+        !Number.isFinite(event.onsetBeats) ||
+        !Number.isFinite(event.durationBeats) || event.durationBeats <= 0) return;
+    const end = event.onsetBeats + event.durationBeats;
+    measureLengths.set(event.measureIndex,
+      Math.max(measureLengths.get(event.measureIndex) || 0, end));
+  });
+  const indexes = [...measureLengths.keys()].sort((a,b)=>a-b);
+  const positiveLengths = indexes.map(index=>measureLengths.get(index)).filter(v=>v>0).sort((a,b)=>a-b);
+  const fallbackLength = positiveLengths.length
+    ? positiveLengths[Math.floor(positiveLengths.length/2)] : 4;
+  const offsets = new Map();
+  let running = 0;
+  let previousIndex = null;
+  indexes.forEach(index => {
+    if (previousIndex !== null && index > previousIndex + 1) {
+      running += fallbackLength * (index - previousIndex - 1);
+    }
+    offsets.set(index, running);
+    running += measureLengths.get(index) || fallbackLength;
+    previousIndex = index;
+  });
+  return { offsets, lengths: measureLengths, fallbackLength };
+}
+
+// STEP13-18: 全パートを同時に評価するためのフレーズ特徴・役割スコア基盤。
+// 1小節で強制分割せず、実際の休符・時間的な空白を境界としてフレーズを作る。
+function buildPartPhraseWindows(events, minNotes = 4, maxNotes = 10) {
+  const timeline = buildMeasureBeatOffsets(events);
+  const byVoice = new Map();
+  (events || []).forEach(event => {
+    if (event.isRest || event.isGrace || !Number.isFinite(event.concertMidiNumber) ||
+        !Number.isFinite(event.onsetBeats) || !Number.isFinite(event.measureIndex)) return;
+    const voiceKey = getScoreVoiceKey(event);
+    if (!byVoice.has(voiceKey)) byVoice.set(voiceKey, []);
+    const globalBeat = (timeline.offsets.get(event.measureIndex) || 0) + event.onsetBeats;
+    byVoice.get(voiceKey).push({ ...event, globalBeat, voiceKey });
+  });
+  const windows = [];
+  byVoice.forEach((items, voiceKey) => {
+    const partId = items[0]?.partId;
+    const sorted = [...items].sort((a,b) => a.globalBeat - b.globalBeat ||
+      a.concertMidiNumber - b.concertMidiNumber);
+    // 同一声部で同時に鳴る和音は旋律の音程列に混ぜない。
+    const onsetGroups = new Map();
+    sorted.forEach(event => {
+      const key = event.globalBeat.toFixed(5);
+      if (!onsetGroups.has(key)) onsetGroups.set(key, []);
+      onsetGroups.get(key).push(event);
+    });
+    const melodicNotes = [...onsetGroups.values()]
+      .filter(group => group.length === 1)
+      .map(group => group[0]);
+    const segments = [];
+    let segment = [];
+    melodicNotes.forEach(event => {
+      const previous = segment[segment.length - 1];
+      const previousEnd = previous
+        ? previous.globalBeat + Math.max(0.05, previous.durationBeats || 0.25) : null;
+      const gap = previous ? event.globalBeat - previousEnd : 0;
+      // 小節境界そのものでは分割しない。長い休符・空白のみで区切る。
+      if (previous && gap > 1.5) {
+        if (segment.length >= minNotes) segments.push(segment);
+        segment = [];
+      }
+      segment.push(event);
+    });
+    if (segment.length >= minNotes) segments.push(segment);
+    segments.forEach(notes => {
+      const stride = Math.max(1, maxNotes - 2);
+      const starts = notes.length <= maxNotes
+        ? [0]
+        : Array.from({length: Math.ceil((notes.length - maxNotes) / stride) + 1}, (_,i)=>i*stride);
+      const finalStart = Math.max(0, notes.length - maxNotes);
+      if (!starts.includes(finalStart)) starts.push(finalStart);
+      [...new Set(starts)].forEach(start => {
+        const slice = notes.slice(start, Math.min(notes.length, start + maxNotes));
+        if (slice.length < minNotes) return;
+        const intervals = [];
+        const rhythm = [];
+        for (let i=1;i<slice.length;i++) {
+          intervals.push(slice[i].concertMidiNumber - slice[i-1].concertMidiNumber);
+          rhythm.push(Math.max(0.05, slice[i].globalBeat - slice[i-1].globalBeat));
+        }
+        const base = rhythm.length ? rhythm.reduce((a,b)=>a+b,0)/rhythm.length : 1;
+        const last = slice[slice.length-1];
+        windows.push({
+          partId, voiceKey, partName: slice[0].partName || '',
+          startMeasure: slice[0].measureIndex, endMeasure: last.measureIndex,
+          startBeat: slice[0].onsetBeats, endBeat: last.onsetBeats,
+          startGlobalBeat: slice[0].globalBeat,
+          endGlobalBeat: last.globalBeat + Math.max(0.05, last.durationBeats || 0.25),
+          notes: slice.length, intervals,
+          encodedIntervals: intervals.map(v => ({
+            direction: v === 0 ? 0 : Math.sign(v),
+            size: Math.abs(v) <= 2 ? 0 : (Math.abs(v) <= 5 ? 1 : 2)
+          })),
+          contour: intervals.map(v => v===0 ? 0 : Math.sign(v)),
+          rhythm: rhythm.map(v => v/base),
+          durations: slice.map(e => Math.max(0.05, e.durationBeats || 0.25)),
+          pitches: slice.map(e => e.concertMidiNumber)
+        });
+      });
+    });
+  });
+  return windows;
+}
+
+// フレーズの音符数が違っても比較できる簡易DP照合。
+// 移調・オクターブ差は音程輪郭で吸収し、リズム比率も別に評価する。
+function comparePhraseWindows(a, b) {
+  if (!a || !b || !Array.isArray(a.intervals) || !Array.isArray(b.intervals) ||
+      a.intervals.length < 3 || b.intervals.length < 3) return 0;
+
+  // 移調・オクターブ差に左右されにくい音程輪郭を比較する。
+  // 局所アラインメントにより、片方だけに装飾音・省略音がある場合も照合する。
+  const encode = values => values.map(v => ({
+    direction: v === 0 ? 0 : Math.sign(v),
+    size: Math.abs(v) <= 2 ? 0 : (Math.abs(v) <= 5 ? 1 : 2)
+  }));
+  const x = a.encodedIntervals || encode(a.intervals);
+  const y = b.encodedIntervals || encode(b.intervals);
+  const cols = y.length + 1;
+  // 局所DPは直前行と現在行だけで計算できるため、行列全体を確保しない。
+  let previousRow = Array(cols).fill(0);
+  let currentRow = Array(cols).fill(0);
+  let best = 0;
+  for (let i = 1; i <= x.length; i++) {
+    currentRow.fill(0);
+    for (let j = 1; j < cols; j++) {
+      const xd = x[i - 1], yd = y[j - 1];
+      const directionCost = xd.direction === yd.direction ? 0 :
+        (xd.direction === 0 || yd.direction === 0 ? 0.42 : 1);
+      const sizeCost = xd.size === yd.size ? 0 : 0.42;
+      const ar = a.rhythm?.[Math.min(i - 1, (a.rhythm || []).length - 1)] || 1;
+      const br = b.rhythm?.[Math.min(j - 1, (b.rhythm || []).length - 1)] || 1;
+      const rhythmCost = Math.min(0.38, Math.abs(Math.log(ar / br)) * 0.16);
+      const matchCost = directionCost * 0.68 + sizeCost * 0.20 + rhythmCost * 0.12;
+      // 一音の追加・省略はギャップとして許容するが、連続した不一致は類似度を下げる。
+      currentRow[j] = Math.max(0,
+        previousRow[j - 1] + (1 - matchCost),
+        previousRow[j] - 0.48,
+        currentRow[j - 1] - 0.48
+      );
+      if (currentRow[j] > best) best = currentRow[j];
+    }
+    const swap = previousRow;
+    previousRow = currentRow;
+    currentRow = swap;
+  }
+  const shorter = Math.min(x.length, y.length);
+  const longer = Math.max(x.length, y.length);
+  const localCoverage = best / Math.max(1, shorter);
+  const lengthRatio = shorter / Math.max(1, longer);
+
+  // リズムの骨格は比較するが、音価の細分化・簡略化は許容する。
+  // 局所一致だけで無関係な長い音型を結び付けないよう、全体の輪郭も照合する。
+  const alignedCount = Math.max(x.length, y.length);
+  let globalAgreement = 0;
+  for (let k = 0; k < alignedCount; k++) {
+    const xi = Math.min(x.length - 1, Math.floor(k * x.length / alignedCount));
+    const yi = Math.min(y.length - 1, Math.floor(k * y.length / alignedCount));
+    const direction = x[xi].direction === y[yi].direction ? 1 :
+      (x[xi].direction === 0 || y[yi].direction === 0 ? 0.45 : 0);
+    const size = x[xi].size === y[yi].size ? 1 : 0.35;
+    globalAgreement += direction * 0.75 + size * 0.25;
+  }
+  globalAgreement /= alignedCount;
+
+  const rhythmA = a.rhythm || [], rhythmB = b.rhythm || [];
+  let rhythmSimilarity = 0.5;
+  if (rhythmA.length && rhythmB.length) {
+    const count = Math.min(rhythmA.length, rhythmB.length);
+    let rhythmError = 0;
+    for (let i = 0; i < count; i++) {
+      const ratio = Math.max(0.05, rhythmA[i]) / Math.max(0.05, rhythmB[i]);
+      const octaveEquivalent = Math.min(ratio, 1 / ratio);
+      // 1:2 / 2:1 の細分化・簡略化は部分一致として評価。
+      const distance = Math.min(Math.abs(Math.log2(octaveEquivalent)),
+        Math.abs(Math.log2(octaveEquivalent / 0.5)) * 0.55);
+      rhythmError += Math.min(1, distance);
+    }
+    rhythmSimilarity = 1 - rhythmError / count;
+  }
+  return Math.max(0, Math.min(1,
+    localCoverage * 0.38 + globalAgreement * 0.34 +
+    lengthRatio * 0.12 + rhythmSimilarity * 0.16
+  ));
+}
+
+function analyzePhraseRelationships(events) {
+  const windows=buildPartPhraseWindows(events);
+  const matchesByPair=new Map();
+  // 役割グループ判定用には、表示・補助スコア用の上限付き一覧とは別に
+  // 類似度0.90以上の全一致を保持する（同一パート間24件上限の影響を受けない）。
+  const strongGroupMatches=[];
+  const recurrenceByPart=new Map();
+  const melodyThemeByPart=new Map();
+  const recurrenceCountByPart=new Map();
+  const crossPartThemeByPart=new Map();
+  const byPart=new Map(), byMeasure=new Map();
+  windows.forEach((window,index)=>{
+    if(!byPart.has(window.partId)) byPart.set(window.partId,[]);
+    byPart.get(window.partId).push({window,index});
+    if(!byMeasure.has(window.startMeasure)) byMeasure.set(window.startMeasure,[]);
+    byMeasure.get(window.startMeasure).push({window,index});
+  });
+  const compared=new Set();
+  const comparePair=(left,right)=>{
+    if(left.index===right.index) return;
+    const lo=Math.min(left.index,right.index), hi=Math.max(left.index,right.index);
+    const pairKey=`${lo}:${hi}`;
+    if(compared.has(pairKey)) return;
+    compared.add(pairKey);
+    const a=left.window,b=right.window;
+    const samePart=a.partId===b.partId;
+    const sameVoice=a.voiceKey===b.voiceKey;
+    if(sameVoice && a.startMeasure===b.startMeasure) return;
+    // 同じ声部のスライド窓が時間的に重なる場合は、同一フレーズの一部分同士を
+    // 再現として数えない。独立した再現だけを比較対象にし、無意味なDP照合も省く。
+    if(sameVoice && Number.isFinite(a.startGlobalBeat) && Number.isFinite(b.startGlobalBeat) &&
+      Number.isFinite(a.endGlobalBeat) && Number.isFinite(b.endGlobalBeat) &&
+      a.startGlobalBeat < b.endGlobalBeat && b.startGlobalBeat < a.endGlobalBeat) return;
+    const similarity=comparePhraseWindows(a,b);
+    if(similarity<0.82) return;
+    const match={windowIndexA:left.index,windowIndexB:right.index,partAId:a.partId,partBId:b.partId,voiceAKey:a.voiceKey,voiceBKey:b.voiceKey,measureA:a.startMeasure,measureB:b.startMeasure,measureAEnd:a.endMeasure,measureBEnd:b.endMeasure,startGlobalBeatA:a.startGlobalBeat,endGlobalBeatA:a.endGlobalBeat,startGlobalBeatB:b.startGlobalBeat,endGlobalBeatB:b.endGlobalBeat,similarity,samePart,sameVoice};
+    if (similarity >= 0.90) strongGroupMatches.push(match);
+    const bucketKey=samePart?`self:${a.partId}`:[a.partId,b.partId].sort().join('|');
+    if(!matchesByPair.has(bucketKey)) matchesByPair.set(bucketKey,[]);
+    const bucket=matchesByPair.get(bucketKey);
+    if(bucket.length<24) bucket.push(match);
+    else {
+      const lowestIndex=bucket.reduce((best,item,index)=>item.similarity<bucket[best].similarity?index:best,0);
+      if(similarity>bucket[lowestIndex].similarity) bucket[lowestIndex]=match;
+    }
+    if(sameVoice) {
+      recurrenceByPart.set(a.partId,Math.max(recurrenceByPart.get(a.partId)||0,similarity));
+      recurrenceCountByPart.set(a.partId,(recurrenceCountByPart.get(a.partId)||0)+1);
+    } else {
+      const key=[a.partId,b.partId].sort().join('|');
+      melodyThemeByPart.set(key,Math.max(melodyThemeByPart.get(key)||0,similarity));
+      [a.partId,b.partId].forEach(id=>crossPartThemeByPart.set(id,
+        Math.max(crossPartThemeByPart.get(id)||0,similarity)));
+    }
+  };
+  byPart.forEach(items=>{
+    for(let i=0;i<items.length;i++) for(let j=i+1;j<items.length;j++) comparePair(items[i],items[j]);
+  });
+  byMeasure.forEach((items,measure)=>{
+    for(let i=0;i<items.length;i++) for(let j=i+1;j<items.length;j++) comparePair(items[i],items[j]);
+    const next=byMeasure.get(measure+1)||[];
+    items.forEach(a=>next.forEach(b=>comparePair(a,b)));
+  });
+  // 離れた小節で別パートへ受け渡された主題も拾うため、3音程の小さな指紋で候補を絞る。
+  // 一致指紋は候補抽出にだけ使い、最終的な一致判定はDP照合で行う。
+  const byGram=new Map();
+  windows.forEach((window,index)=>{
+    for(let i=0;i<=window.intervals.length-3;i++) {
+      const gram=window.intervals.slice(i,i+3).map(v=>`${v===0?0:Math.sign(v)}:${Math.abs(v)<=2?0:(Math.abs(v)<=5?1:2)}`).join(',');
+      if(!byGram.has(gram)) byGram.set(gram,[]);
+      byGram.get(gram).push({window,index});
+    }
+  });
+  byGram.forEach(items=>{
+    const unique=[...new Map(items.map(item=>[item.index,item])).values()];
+    for(let i=0;i<unique.length;i++) for(let j=i+1;j<unique.length;j++) {
+      if(unique[i].window.partId!==unique[j].window.partId) comparePair(unique[i],unique[j]);
+    }
+  });
+  const matches=[...matchesByPair.values()].flat();
+  return {windows,matches,groupMatches:strongGroupMatches,recurrenceByPart,recurrenceCountByPart,
+    melodyThemeByPart,crossPartThemeByPart};
+}
+
+// フレーズ一致が、現在分析している小節範囲に実際に重なるかを確認する。
+// 隣接小節や別区間の一致が、現在の小節の役割へ漏れることを防ぐ。
+function phraseMatchOverlapsMeasureRange(match, side, minMeasure, maxMeasure) {
+  const startKey = side === "A" ? "measureA" : "measureB";
+  const endKey = side === "A" ? "measureAEnd" : "measureBEnd";
+  const start = Number.isFinite(match?.[startKey]) ? match[startKey] : null;
+  const end = Number.isFinite(match?.[endKey]) ? match[endKey] : start;
+  if (start === null || end === null || !Number.isFinite(minMeasure) || !Number.isFinite(maxMeasure)) {
+    return false;
+  }
+  return end >= minMeasure && start <= maxMeasure;
+}
+
+function analyzeParallelRoleScores(analysis, roleEvidence, melodyCandidates, counterMelodies, rhythmRelationships) {
+  const events=analysis.events || [];
+  const phrase=analysis.phraseAnalysis || analyzePhraseRelationships(events);
+  const melodyMap=new Map((melodyCandidates||[]).map(x=>[x.partId,x]));
+  const globalRoleMap=new Map((analysis.globalRoleResults||[]).map(item=>[item.partId,item.roles||[]]));
+  const isMelodyAnchor=id=>Boolean(melodyMap.get(id)?.candidate || globalRoleMap.get(id)?.includes('主旋律候補'));
+  const phraseMelodySupport=new Map();
+  const voiceScoped = events.some(event => event.originalPartId !== undefined);
+  const phraseEntityIds = match => voiceScoped
+    ? [match.voiceAKey || match.partAId, match.voiceBKey || match.partBId]
+    : [match.partAId, match.partBId];
+  const phraseIsSameEntity = match => voiceScoped ? Boolean(match.sameVoice) : Boolean(match.samePart);
+  const activeMeasures = events.map(event => event.measureIndex).filter(Number.isFinite);
+  const activeMinMeasure = activeMeasures.length ? Math.min(...activeMeasures) : null;
+  const activeMaxMeasure = activeMeasures.length ? Math.max(...activeMeasures) : null;
+  const phraseSideInContext = (match, side) => {
+    if (activeMinMeasure === null || activeMaxMeasure === null) return false;
+    return phraseMatchOverlapsMeasureRange(match, side, activeMinMeasure, activeMaxMeasure);
+  };
+  phrase.matches.forEach(match=>{
+    if(phraseIsSameEntity(match)) return;
+    const [entityA, entityB] = phraseEntityIds(match);
+    const a=isMelodyAnchor(entityA), b=isMelodyAnchor(entityB);
+    if(a && !b && phraseSideInContext(match, 'B'))
+      phraseMelodySupport.set(entityB,Math.max(phraseMelodySupport.get(entityB)||0,match.similarity));
+    if(b && !a && phraseSideInContext(match, 'A'))
+      phraseMelodySupport.set(entityA,Math.max(phraseMelodySupport.get(entityA)||0,match.similarity));
+  });
+  const counterMap=new Map();
+  (counterMelodies||[]).forEach(x=>{
+    if(x.relationship==='反対方向の動きが多い' && x.comparedCount>=3)
+      counterMap.set(x.otherPartId,Math.max(counterMap.get(x.otherPartId)||0,0.72));
+  });
+  const rhythmMap=new Map();
+  (rhythmRelationships||[]).forEach(x=>{
+    const sim=Number(x.rhythmSimilarity)||0;
+    [x.partAId,x.partBId].forEach(id=>rhythmMap.set(id,Math.max(rhythmMap.get(id)||0,sim)));
+  });
+  const usable=events.filter(e=>!e.isRest&&!e.isGrace&&Number.isFinite(e.concertMidiNumber));
+  const pitchByOnset=new Map();
+  usable.forEach(e=>{
+    const k=`${e.measureIndex}_${e.onsetBeats.toFixed(3)}`;
+    if(!pitchByOnset.has(k)) pitchByOnset.set(k,[]);
+    pitchByOnset.get(k).push(e);
+  });
+  const allPitches=usable.map(e=>e.concertMidiNumber).sort((a,b)=>a-b);
+  const medianPitch=allPitches.length?allPitches[Math.floor(allPitches.length/2)]:60;
+  const scores=new Map();
+  (analysis.partFeatures||[]).forEach(part=>{
+    const ev=usable.filter(e=>e.partId===part.partId);
+    const evidence=roleEvidence.get(part.partId)||{};
+    const melody=melodyMap.get(part.partId);
+    const recurrence=phrase.recurrenceByPart.get(part.partId)||0;
+    const recurrenceCount=phrase.recurrenceCountByPart?.get(part.partId)||0;
+    const crossPartTheme=phrase.crossPartThemeByPart?.get(part.partId)||0;
+    const ownPitches=ev.sort((a,b)=>a.measureIndex-b.measureIndex||a.onsetBeats-b.onsetBeats)
+      .map(e=>e.concertMidiNumber);
+    const ownIntervals=ownPitches.slice(1).map((p,i)=>p-ownPitches[i]).filter(v=>v!==0);
+    const ownSteps=ownIntervals.filter(v=>Math.abs(v)<=2).length;
+    let ownTurns=0;
+    for(let i=1;i<ownIntervals.length;i++) if(Math.sign(ownIntervals[i])!==Math.sign(ownIntervals[i-1])) ownTurns++;
+    const contour=ownIntervals.length?ownSteps/ownIntervals.length:0;
+    const directional=Math.min(1,ownTurns/4);
+    const phraseSupport=phraseMelodySupport.get(part.partId)||0;
+    const globalMelodyAnchor=globalRoleMap.get(part.partId)?.includes('主旋律候補');
+    const melodyBase=melody?.candidate
+      ? Math.max(0.52,(Number(melody.melodyScore)||0)/100)
+      : (part.noteCount>=4 && (contour>=0.35 || ownTurns>=2) ? 0.30+contour*0.20+directional*0.10 : (globalMelodyAnchor ? 0.36 : 0));
+    // 主題の再現は旋律性を補強するが、反復伴奏を主旋律と誤認しないよう
+    // 単独では候補化せず、旋律輪郭・既存候補・他パートとの照合と組み合わせる。
+    const recurrenceBoost = recurrenceCount >= 2 && contour >= 0.30
+      ? Math.min(0.10, recurrence * 0.10) : 0;
+    const crossThemeBoost = crossPartTheme >= 0.88 && contour >= 0.30
+      ? Math.min(0.08, (crossPartTheme - 0.82) * 0.35) : 0;
+    const phraseBoost=Math.min(0.26,
+      Math.max(recurrence,phraseSupport)*0.20 + recurrenceBoost + crossThemeBoost);
+    let harmony=0, melodyAligned=0, intervalStable=0, compared=0;
+    let bassLow=0;
+    ev.forEach(e=>{
+      const k=`${e.measureIndex}_${e.onsetBeats.toFixed(3)}`;
+      const group=pitchByOnset.get(k)||[];
+      const other=group.filter(o=>o.partId!==part.partId);
+      if(other.length) {
+        compared++;
+        const distances=other.map(o=>Math.abs(o.concertMidiNumber-e.concertMidiNumber));
+        if(distances.some(d=>d>=3 && d<=12)) harmony++;
+        if(group.some(o=>o.partId!==part.partId && o.concertMidiNumber>e.concertMidiNumber)) bassLow++;
+      }
+      if(group.length>=3) melodyAligned++;
+    });
+    const harmonyRatio=compared?harmony/compared:0;
+    const stablePitch=evidence.melodyPitchDistanceAverage;
+    intervalStable=Number.isFinite(stablePitch)&&stablePitch>=3&&stablePitch<=12?0.8:0;
+    // 主旋律と同時に動く割合を使い、単なる同時発音とハモリを区別する。
+    const alignment = Number(evidence.melodyAlignmentRatio) || 0;
+    const harmonyMotionSupport = Math.min(1, alignment * 0.65 + intervalStable * 0.35);
+    const percussion=/perc|drum|timp|cymbal|snare|tambour|打楽器|ティンパニ|シンバル|スネア|バスドラム/i.test(`${part.partName||''} ${part.instrument||''}`);
+    const short=evidence.shortNoteRatio||0;
+    const repeated=evidence.repeatedRhythmRatio||0;
+    const chord=evidence.chordOnsetRatio||0;
+    // 音域の低さだけではベースと判定しない。
+    // 実際に同時発音の中で最低音を担う割合を使い、音の長さ・音域の広さは補助材料に留める。
+    const lowPositionRatio=Number(evidence.lowPositionRatio)||0;
+    const bassMotion=ev.length>3?Math.min(1,(new Set(ev.map(e=>Math.round(e.concertMidiNumber/12))).size)/3):0;
+    // 旋律候補・全体分析の主旋律判定・強いフレーズ一致がある場合、
+    // 低音域であってもベース判定が主旋律を上回らないようにする。
+    const hasMelodicEvidence=Boolean(
+      melody?.candidate || globalMelodyAnchor || phraseSupport>=0.88 ||
+      (Number(melody?.evidence?.intervalCount)>=4 && Number(melody?.melodyScore)>=48)
+    );
+    // ベースは長音である必要はない。四分音符などの短めの進行でも、
+    // 同時発音内で最低音を担い、和声進行に沿って動くなら十分な根拠とする。
+    const bassDurationSupport = evidence.averageDuration
+      ? Math.min(1, evidence.averageDuration / 1.0) : 0;
+    const rawBassScore=Math.min(0.94,
+      0.10 + 0.58*lowPositionRatio +
+      0.10*bassDurationSupport +
+      0.16*bassMotion
+    );
+    const bassScore=hasMelodicEvidence ? Math.min(0.48,rawBassScore) : rawBassScore;
+    const partScores={
+      '主旋律候補':Math.min(0.98,melodyBase+phraseBoost),
+      'ハモリ候補':Math.min(0.94,0.14+0.28*harmonyRatio+0.34*harmonyMotionSupport+0.24*alignment),
+      '対旋律候補':(melody?.candidate || phraseSupport>=0.78) ? 0 : Math.min(0.94,Math.max(counterMap.get(part.partId)||0,0.20+0.34*contour+0.20*directional+0.26*(1-Math.max(evidence.melodyAlignmentRatio||0,phraseSupport)))),
+      '伴奏候補':Math.min(0.94,0.16+0.34*chord+0.28*repeated+0.22*(evidence.repeatedPitchRatio||0)),
+      'ベース候補':bassScore,
+      'リズム・打楽器候補':percussion?1:((evidence.repeatedPitchRatio||0)>=0.30 && short>=0.40 ? Math.min(0.88,0.10+0.24*short+0.24*repeated+0.42*(evidence.repeatedPitchRatio||0)) : 0)
+    };
+    // 閾値未満の根拠も、同一フレーズの別パートと照合するために保持する。
+    // 単独では役割に採用せず、強い一致相手と独立根拠がそろった場合だけ後段で補強する。
+    const supportScores = {...partScores};
+    const thresholds={'主旋律候補':0.52,'ハモリ候補':0.56,'対旋律候補':0.56,'伴奏候補':0.56,'ベース候補':0.58,'リズム・打楽器候補':percussion?0.5:0.64};
+    Object.keys(partScores).forEach(role=>{if(partScores[role]<thresholds[role]) delete partScores[role];});
+    scores.set(part.partId,{candidateScores:partScores,supportScores,phraseRecurrence:recurrence,
+      phraseRecurrenceCount:recurrenceCount,crossPartThemeSupport:crossPartTheme,phraseMatches:phrase.matches.filter(m=>m.partAId===part.partId||m.partBId===part.partId),medianPitch});
+  });
+  return {scores,phrase};
+}
+
+// STEP22: 相互一致するフレーズ窓を、重複のない完全リンク群へまとめる。
+// 連結しているだけのA-B-Cを同一群にせず、群を結合する際は全ての交差ペアを確認する。
+function buildPhraseMatchGroups(matches, windows, events, threshold = 0.90) {
+  const voiceScoped = (events || []).some(event => event.originalPartId !== undefined);
+  const entityIds = (windows || []).map(window => {
+    if (!window) return null;
+    return voiceScoped ? (window.voiceKey || window.partId) : window.partId;
+  });
+  const pairSimilarity = new Map();
+  const validMatches = (matches || []).filter(match =>
+    Number.isInteger(match.windowIndexA) && Number.isInteger(match.windowIndexB) &&
+    match.windowIndexA !== match.windowIndexB &&
+    match.windowIndexA >= 0 && match.windowIndexB >= 0 &&
+    match.windowIndexA < entityIds.length && match.windowIndexB < entityIds.length &&
+    Number(match.similarity) >= threshold
+  );
+  validMatches.forEach(match => {
+    const a = match.windowIndexA, b = match.windowIndexB;
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    pairSimilarity.set(key, Math.max(pairSimilarity.get(key) || 0, Number(match.similarity)));
+  });
+  const clusters = [];
+  const indexes = new Set();
+  validMatches.forEach(match => {
+    indexes.add(match.windowIndexA);
+    indexes.add(match.windowIndexB);
+  });
+  [...indexes].forEach(index => clusters.push([index]));
+  const clusterFor = new Map();
+  const refreshIndex = () => {
+    clusterFor.clear();
+    clusters.forEach((cluster, clusterIndex) => cluster.forEach(index => clusterFor.set(index, clusterIndex)));
+  };
+  refreshIndex();
+  const sortedMatches = [...validMatches].sort((a, b) => Number(b.similarity) - Number(a.similarity));
+  sortedMatches.forEach(match => {
+    const a = match.windowIndexA, b = match.windowIndexB;
+    const leftIndex = clusterFor.get(a), rightIndex = clusterFor.get(b);
+    if (leftIndex === undefined || rightIndex === undefined || leftIndex === rightIndex) return;
+    const left = clusters[leftIndex], right = clusters[rightIndex];
+    const combined = [...left, ...right];
+    const entities = combined.map(index => entityIds[index]).filter(Boolean);
+    if (entities.length !== combined.length || new Set(entities).size !== entities.length) return;
+    const allCrossPairsMatch = left.every(x => right.every(y => {
+      const key = x < y ? `${x}:${y}` : `${y}:${x}`;
+      return (pairSimilarity.get(key) || 0) >= threshold;
+    }));
+    if (!allCrossPairsMatch) return;
+    clusters[leftIndex] = combined;
+    clusters.splice(rightIndex, 1);
+    refreshIndex();
+  });
+  return clusters.filter(cluster => cluster.length >= 2);
+}
+
 function classifyPartRoles(analysis) {
   const features = analysis.partFeatures || [];
   const melodies = analysis.melodyCandidates || [];
   const counterMelodies = analysis.counterMelody || [];
   const rhythms = analysis.rhythmRelationships || [];
-  const melodyIds = new Set(melodies.filter(item => item.candidate).map(item => item.partId));
   const roleEvidence = analyzeNonMelodyRoleEvidence(analysis.events || [], melodies);
+  const parallel = analyzeParallelRoleScores(analysis, roleEvidence, melodies, counterMelodies, rhythms);
 
-  return features.map(part => {
-    const roles = [];
+  const classified = features.map(part => {
     const melody = melodies.find(item => item.partId === part.partId);
-    const counterResults = counterMelodies.filter(item =>
-      item.otherPartId === part.partId && item.comparedCount >= 3
-    );
-    const counterScore = counterResults.filter(item =>
-      item.relationship === '反対方向の動きが多い'
-    ).length;
-    const rhythmResults = rhythms.filter(item =>
-      (item.partAId === part.partId && melodyIds.has(item.partBId)) ||
-      (item.partBId === part.partId && melodyIds.has(item.partAId))
-    );
-    const rhythmSimilarity = rhythmResults.length
-      ? Math.max(...rhythmResults.map(item => item.rhythmSimilarity)) : null;
     const evidence = roleEvidence.get(part.partId) || {};
-    const isMelody = Boolean(melody?.candidate);
-
-    let candidateScores = {};
-    let selectedRole = null;
-
-    if (isMelody) {
-      // STEP10/11で改善したメロディー判定は維持する。
-      // 低音楽器が主旋律を担当するケースもあるため、音域で役割を上書きしない。
-      roles.push('主旋律候補');
-      selectedRole = '主旋律候補';
-    } else {
-      const partName = `${part.partName || ''} ${part.instrument || ''}`.toLowerCase();
-      const percussionName = /perc|drum|timp|cymbal|snare|tambour|打楽器|ティンパニ|シンバル|スネア|バスドラム/.test(partName);
-
-      // まず候補ごとの根拠を同じ尺度（0〜1）で評価する。
-      // 閾値を満たさない候補は比較対象に入れず、根拠不足なら無色にする。
-      if (counterScore > 0) {
-        candidateScores['対旋律候補'] = Math.min(0.95, 0.68 + counterScore * 0.08);
-      }
-
-      if (!percussionName && evidence.lowPositionRatio < 0.55 &&
-          (evidence.melodyComparisons || 0) >= 3 &&
-          evidence.melodyAlignmentRatio >= 0.45 &&
-          evidence.distinctPitchRatio >= 0.65 &&
-          evidence.chordOnsetRatio < 0.35 &&
-          evidence.melodyPitchDistanceAverage >= 3 &&
-          evidence.melodyPitchDistanceAverage <= 12) {
-        candidateScores['ハモリ候補'] = Math.min(0.95,
-          0.45 * evidence.melodyAlignmentRatio +
-          0.35 * evidence.distinctPitchRatio +
-          0.20 * (1 - Math.abs(evidence.melodyPitchDistanceAverage - 7.5) / 7.5)
-        );
-      }
-
-      if (evidence.onsetCount >= 3 &&
-          evidence.lowPositionRatio >= 0.55 &&
-          evidence.averageDuration >= 0.45) {
-        candidateScores['ベース候補'] = Math.min(0.95,
-          0.65 * evidence.lowPositionRatio +
-          0.35 * Math.min(1, evidence.averageDuration / 1.5)
-        );
-      }
-
-      if (percussionName) {
-        // 明示的な打楽器パートは、他の一般的なパターン判定より優先する。
-        candidateScores['リズム・打楽器候補'] = 1;
-      } else {
-        const accompanimentEvidence =
-          (evidence.chordOnsetRatio >= 0.2 && evidence.onsetCount >= 3) ||
-          (evidence.repeatedRhythmRatio >= 0.5 && evidence.onsetCount >= 4 &&
-           evidence.repeatedPitchRatio >= 0.3 && evidence.shortNoteRatio >= 0.4);
-        if (accompanimentEvidence) {
-          candidateScores['伴奏候補'] = Math.min(0.90,
-            0.40 * evidence.chordOnsetRatio +
-            0.35 * evidence.repeatedRhythmRatio +
-            0.25 * evidence.repeatedPitchRatio
-          );
-        } else if (rhythmSimilarity !== null && rhythmSimilarity >= 0.75) {
-          // メロディーとのリズム一致だけでは強い根拠にならないため、低い点数にする。
-          candidateScores['伴奏候補'] = 0.50 + Math.min(0.10, (rhythmSimilarity - 0.75) * 0.4);
-        }
-      }
-
-      const rankedCandidates = Object.entries(candidateScores)
-        .sort((a, b) => b[1] - a[1]);
-      if (rankedCandidates.length && rankedCandidates[0][1] >= 0.52) {
-        selectedRole = rankedCandidates[0][0];
-        roles.push(selectedRole);
-      }
-    }
-
+    const parallelResult = parallel.scores.get(part.partId) || {candidateScores:{},phraseRecurrence:0,phraseMatches:[]};
+    const candidateScores = {...parallelResult.candidateScores};
+    const rankedCandidates = Object.entries(candidateScores).sort((a,b)=>b[1]-a[1]);
+    const selectedRole = rankedCandidates.length ? rankedCandidates[0][0] : null;
     return {
       partId: part.partId,
       partName: part.partName,
-      roles,
+      roles: selectedRole ? [selectedRole] : [],
       melodyScore: melody?.melodyScore ?? null,
       melodyEvidence: melody?.evidence ?? null,
       roleEvidence: evidence,
       candidateScores,
+      roleSupportScores: parallelResult.supportScores || {},
       selectedRole,
-      rhythmSimilarity
+      phraseRecurrence: parallelResult.phraseRecurrence,
+      phraseRecurrenceCount: parallelResult.phraseRecurrenceCount || 0,
+      crossPartThemeSupport: parallelResult.crossPartThemeSupport || 0,
+      phraseMatches: parallelResult.phraseMatches,
+      rhythmSimilarity: rhythms.filter(item => item.partAId===part.partId || item.partBId===part.partId)
+        .reduce((best,item)=>Math.max(best,Number(item.rhythmSimilarity)||0),0)
     };
   });
+
+  // STEP29: フレーズ一致の役割補強を強化（独立根拠・競合役割の条件は維持）。
+  // STEP21: フレーズ窓を相互一致するグループとして扱い、グループ単位で役割整合性を確認する。
+  // 単独の高類似ペアから役割を伝播させず、グループ内の全ペアに強い一致がある場合だけ採用。
+  const roleKeys = [
+    '主旋律候補', 'ハモリ候補', '対旋律候補',
+    '伴奏候補', 'ベース候補', 'リズム・打楽器候補'
+  ];
+  const roleThresholds = {
+    '主旋律候補': 0.52, 'ハモリ候補': 0.56, '対旋律候補': 0.56,
+    '伴奏候補': 0.56, 'ベース候補': 0.58, 'リズム・打楽器候補': 0.64
+  };
+  const roleByPart = new Map(classified.map(item => [item.partId, item]));
+  const phrase = parallel.phrase;
+  const allPhraseMatches = phrase?.groupMatches || (phrase?.matches || []);
+  const windows = phrase?.windows || [];
+  // 全曲フレーズ分析の一致を、そのまま各小節へ流用すると、
+  // 別の小節で成立した役割が現在の小節へ漏れ込む。
+  // 小節分析時は、照合された両方のフレーズが現在の分析範囲に
+  // 実際に重なる一致だけを、役割整合性の根拠として使う。
+  const activeMeasureValues = (analysis.events || []).map(event => event.measureIndex).filter(Number.isFinite);
+  const activeMeasureMin = activeMeasureValues.length ? Math.min(...activeMeasureValues) : null;
+  const activeMeasureMax = activeMeasureValues.length ? Math.max(...activeMeasureValues) : null;
+  const phraseMatches = activeMeasureValues.length
+    ? allPhraseMatches.filter(match =>
+        phraseMatchOverlapsMeasureRange(match, 'A', activeMeasureMin, activeMeasureMax) &&
+        phraseMatchOverlapsMeasureRange(match, 'B', activeMeasureMin, activeMeasureMax)
+      )
+    : allPhraseMatches;
+  const phraseGroups = buildPhraseMatchGroups(phraseMatches, windows, analysis.events || [], 0.90);
+  // グループの中身はフレーズ窓の配列インデックス。
+  // 解析対象が声部単位ならvoiceKey、パート単位ならpartIdで役割結果へ対応付ける。
+  const voiceScoped = (analysis.events || []).some(event => event.originalPartId !== undefined);
+  const entityForWindow = windowIndex => {
+    const window = windows[windowIndex];
+    if (!window) return null;
+    return voiceScoped ? (window.voiceKey || window.partId) : window.partId;
+  };
+
+  const phraseRoleSupport = new Map();
+  // 同じフレーズを演奏する別パート間で、役割候補が少し弱い場合も照合する。
+  // 強い側の役割を無条件コピーせず、相手側にも最低限の独立した根拠がある場合だけ補強する。
+  const addPhraseRoleSupport = (partId, role, score) => {
+    if (!phraseRoleSupport.has(partId)) phraseRoleSupport.set(partId, new Map());
+    const map = phraseRoleSupport.get(partId);
+    map.set(role, Math.max(map.get(role) || 0, score));
+  };
+  phraseMatches.forEach(match => {
+    // STEP29: 同一素材の演奏パートを取りこぼさないよう、強い一致(0.86以上)も
+    // 役割整合性の候補にする。ただし類似度だけで色をコピーせず、各パート側の
+    // 独立した役割根拠と競合役割を必ず確認する。
+    if (match.sameVoice || match.samePart || Number(match.similarity) < 0.86) return;
+    const indexA = match.windowIndexA;
+    const indexB = match.windowIndexB;
+    const partA = entityForWindow(indexA);
+    const partB = entityForWindow(indexB);
+    if (!partA || !partB || partA === partB) return;
+    const itemA = roleByPart.get(partA);
+    const itemB = roleByPart.get(partB);
+    if (!itemA || !itemB) return;
+    roleKeys.forEach(role => {
+      const scoreA = Number(itemA.candidateScores?.[role] ?? itemA.roleSupportScores?.[role] ?? 0);
+      const scoreB = Number(itemB.candidateScores?.[role] ?? itemB.roleSupportScores?.[role] ?? 0);
+      const threshold = roleThresholds[role] || 0.56;
+      const otherA = Math.max(0, ...roleKeys.filter(key => key !== role).map(key => Number(itemA.candidateScores?.[key] ?? itemA.roleSupportScores?.[key] ?? 0)));
+      const otherB = Math.max(0, ...roleKeys.filter(key => key !== role).map(key => Number(itemB.candidateScores?.[key] ?? itemB.roleSupportScores?.[key] ?? 0)));
+      const aAnchors = scoreA >= threshold && scoreA >= otherA - 0.05;
+      const bAnchors = scoreB >= threshold && scoreB >= otherB - 0.05;
+      const phraseEvidenceFloor = Number(match.similarity) >= 0.90 ? 0.32 : 0.38;
+      if (aAnchors && scoreB >= Math.max(phraseEvidenceFloor, threshold - 0.24) && otherB < scoreB + 0.12) {
+        addPhraseRoleSupport(partB, role, Math.min(0.88, Math.max(scoreB, scoreA * 0.92)));
+      }
+      if (bAnchors && scoreA >= Math.max(phraseEvidenceFloor, threshold - 0.24) && otherA < scoreA + 0.12) {
+        addPhraseRoleSupport(partA, role, Math.min(0.88, Math.max(scoreA, scoreB * 0.92)));
+      }
+    });
+  });
+  phraseGroups.forEach(group => {
+    const members = [...new Set(group.map(entityForWindow).filter(Boolean))]
+      .map(id => roleByPart.get(id)).filter(Boolean);
+    if (members.length < 2) return;
+    roleKeys.forEach(role => {
+      const scores = members.map(item => Number(item.candidateScores?.[role] || 0));
+      const strong = Math.max(...scores);
+      if (strong < 0.68) return;
+      // グループ全員に最低限の独立根拠があり、別役割が明確なメンバーがいない場合のみ整合。
+      const valid = members.every((item,index) => {
+        const score = scores[index];
+        const other = Math.max(0, ...roleKeys.filter(key => key !== role)
+          .map(key => Number(item.candidateScores?.[key] || 0)));
+        return score >= Math.max(0.44, roleThresholds[role] - 0.12) && other < score + 0.12;
+      });
+      if (!valid) return;
+      members.forEach((item,index) => {
+        if (!phraseRoleSupport.has(item.partId)) phraseRoleSupport.set(item.partId, new Map());
+        const map = phraseRoleSupport.get(item.partId);
+        const support = Math.min(0.08, Math.max(0, strong - 0.68) * 0.25 + 0.02);
+        map.set(role, Math.max(map.get(role) || 0, Math.min(0.94, scores[index] + support)));
+      });
+    });
+  });
+  phraseRoleSupport.forEach((roleMap, partId) => {
+    const item = roleByPart.get(partId);
+    if (!item) return;
+    roleMap.forEach((score, role) => {
+      item.candidateScores[role] = Math.max(Number(item.candidateScores[role] || 0), score);
+    });
+    const ranked = Object.entries(item.candidateScores).sort((a,b) => b[1] - a[1]);
+    item.selectedRole = ranked[0]?.[0] || null;
+    item.roles = item.selectedRole ? [item.selectedRole] : [];
+    item.phraseRoleConsistency = [...roleMap.keys()];
+  });
+
+  // 対旋律は曲全体で独立した候補を順位付けし、上位2パートを別レイヤーにする。
+  // 同一フレーズの重複パートや主旋律候補は、対旋律として二重計上しない。
+  const counterRanked = classified
+    .filter(item => Number(item.candidateScores?.['対旋律候補']) >= 0.56 &&
+      !item.roles.includes('主旋律候補'))
+    .sort((a,b) => b.candidateScores['対旋律候補'] - a.candidateScores['対旋律候補']);
+  counterRanked.slice(0,2).forEach((item,index) => {
+    if (index===1 && item.candidateScores['対旋律候補'] < 0.62) return;
+    const role=index===0?'対旋律候補':'対旋律候補2';
+    item.candidateScores[role]=item.candidateScores['対旋律候補'];
+    const ranked=Object.entries(item.candidateScores).sort((a,b)=>b[1]-a[1]);
+    item.selectedRole=ranked[0]?.[0] || null;
+    item.roles=item.selectedRole?[item.selectedRole]:[];
+  });
+  return classified;
+}
+
+// 同一声部のメロディーフレーズが前後の小節で継続している場合、
+// 中間小節だけ別役割になる不連続を補正する。中間小節に実音がある場合のみ適用。
+function reinforceBridgedMelodyMeasures(measureResults, scoreTimeline) {
+  const byVoice = new Map();
+  (measureResults || []).forEach(result => {
+    (result.voiceRoleResults || []).forEach(voice => {
+      if (!byVoice.has(voice.voiceKey)) byVoice.set(voice.voiceKey, new Map());
+      byVoice.get(voice.voiceKey).set(result.measureIndex, voice);
+    });
+  });
+  const eventsByVoiceMeasure = new Map();
+  const onsetGroupsByMeasure = new Map();
+  (scoreTimeline || []).forEach(event => {
+    if (event.isRest || event.isGrace || !Number.isFinite(event.concertMidiNumber)) return;
+    const voiceKey = getScoreVoiceKey(event);
+    const key = `${voiceKey}|${event.measureIndex}`;
+    eventsByVoiceMeasure.set(key, (eventsByVoiceMeasure.get(key) || 0) + 1);
+    const onset = Number.isFinite(event.onsetBeats) ? event.onsetBeats :
+      (Number.isFinite(event.onset) ? event.onset : null);
+    if (onset === null) return;
+    const groupKey = `${event.measureIndex}|${Number(onset).toFixed(3)}`;
+    if (!onsetGroupsByMeasure.has(groupKey)) onsetGroupsByMeasure.set(groupKey, []);
+    onsetGroupsByMeasure.get(groupKey).push({voiceKey, pitch:event.concertMidiNumber});
+  });
+  // 小節内の各発音タイミングで最低音を担った割合を計算する。
+  // 四分音符のように短い音価でも、和声の土台を継続して担えばベース根拠にする。
+  const lowestShareByVoiceMeasure = new Map();
+  const activeOnsetsByVoiceMeasure = new Map();
+  const onsetCountByMeasure = new Map();
+  onsetGroupsByMeasure.forEach((group, groupKey) => {
+    const measureIndex = Number(groupKey.split('|')[0]);
+    onsetCountByMeasure.set(measureIndex, (onsetCountByMeasure.get(measureIndex) || 0) + 1);
+    const lowest = Math.min(...group.map(item => item.pitch));
+    const activeVoices = new Set(group.map(item => item.voiceKey));
+    activeVoices.forEach(voiceKey => {
+      const key = `${voiceKey}|${measureIndex}`;
+      activeOnsetsByVoiceMeasure.set(key, (activeOnsetsByVoiceMeasure.get(key) || 0) + 1);
+    });
+    const lowestVoices = new Set(group.filter(item => item.pitch === lowest).map(item => item.voiceKey));
+    lowestVoices.forEach(voiceKey => {
+      const key = `${voiceKey}|${measureIndex}`;
+      lowestShareByVoiceMeasure.set(key, (lowestShareByVoiceMeasure.get(key) || 0) + 1);
+    });
+  });
+  byVoice.forEach((measureMap, voiceKey) => {
+    const indexes = [...measureMap.keys()].sort((a,b) => a-b);
+    for (let i = 0; i < indexes.length; i++) {
+      const leftIndex = indexes[i];
+      const left = measureMap.get(leftIndex);
+      if (!(left.roles || []).includes('主旋律候補')) continue;
+      for (let j = i + 1; j < indexes.length; j++) {
+        const rightIndex = indexes[j];
+        const gap = rightIndex - leftIndex;
+        if (gap > 4) break;
+        if (gap < 2) continue;
+        const right = measureMap.get(rightIndex);
+        if (!(right.roles || []).includes('主旋律候補')) continue;
+        // 前後の旋律アンカーに挟まれた最大3小節の空白を順に確認する。
+        // 休符だけの小節や、明確な別役割がある小節は補完しない。
+        for (let middleIndex = leftIndex + 1; middleIndex < rightIndex; middleIndex++) {
+          const middle = measureMap.get(middleIndex);
+          if (!middle) continue;
+          const noteCount = eventsByVoiceMeasure.get(`${voiceKey}|${middleIndex}`) || 0;
+          if (noteCount === 0) continue;
+          const scores = middle.candidateScores || {};
+          const competingRoles = (middle.roles || []).filter(role => role !== '主旋律候補');
+          const strongestCompeting = Math.max(0,
+            ...Object.entries(scores).filter(([role]) => role !== '主旋律候補').map(([, score]) => Number(score) || 0),
+            ...competingRoles.map(role => Number(scores[role]) || 0.60));
+          const localMelodyScore = Number(scores['主旋律候補'] || 0);
+          // 明確に強いベース・伴奏等の根拠がある場合は上書きしない。
+          if (strongestCompeting >= 0.76 && strongestCompeting > localMelodyScore + 0.12) continue;
+          middle.roles = ['主旋律候補'];
+          middle.status = 'melody-phrase-bridged';
+          middle.reason = '前後の小節が同一声部の主旋律で、中間小節にも実音があり、最大4小節のフレーズ継続として補強';
+          middle.candidateScores = {...scores, '主旋律候補': Math.max(localMelodyScore, 0.68)};
+          middle.melodyPhraseContinuity = true;
+        }
+      }
+    }
+  });
+
+  // STEP31: 各小節で全声部を再評価するベース探索。
+  // 同時刻に開始した音だけで最低音を比べると、持続音や異なる発音タイミングを
+  // 見落とすため、小節内の各発音時点で「その時点に鳴っている音」を比較する。
+  const eventsByMeasureForBass = new Map();
+  (scoreTimeline || []).forEach(event => {
+    if (event.isRest || event.isGrace || !Number.isFinite(event.concertMidiNumber)) return;
+    if (!eventsByMeasureForBass.has(event.measureIndex)) eventsByMeasureForBass.set(event.measureIndex, []);
+    eventsByMeasureForBass.get(event.measureIndex).push(event);
+  });
+
+  (measureResults || []).forEach(result => {
+    const voices = result.voiceRoleResults || [];
+    if (!voices.length) return;
+    const measureIndex = result.measureIndex;
+    const events = eventsByMeasureForBass.get(measureIndex) || [];
+    if (!events.length) return;
+
+    const onsets = [...new Set(events.map(event => Number(event.onsetBeats) || 0))].sort((a,b) => a-b);
+    if (!onsets.length) return;
+    const metrics = new Map();
+    const ensure = key => {
+      if (!metrics.has(key)) metrics.set(key, {active:0, lowest:0, bottomBand:0, pitches:[], representativePitches:[], activeOnsets:[]});
+      return metrics.get(key);
+    };
+    onsets.forEach(onset => {
+      const active = events.filter(event => {
+        const start = Number(event.onsetBeats) || 0;
+        const duration = Math.max(0.001, Number(event.durationBeats) || 0.001);
+        return start <= onset + 0.0001 && start + duration > onset + 0.0001;
+      });
+      if (!active.length) return;
+      const pitches = active.map(event => event.concertMidiNumber).sort((a,b)=>a-b);
+      const lowest = pitches[0];
+      const bottomCut = pitches[Math.min(pitches.length - 1, Math.floor((pitches.length - 1) * 0.25))];
+      const activeByVoice = new Map();
+      active.forEach(event => {
+        const key = getScoreVoiceKey(event);
+        if (!activeByVoice.has(key)) activeByVoice.set(key, []);
+        activeByVoice.get(key).push(event.concertMidiNumber);
+      });
+      activeByVoice.forEach((voicePitches, key) => {
+        const metric = ensure(key);
+        metric.active++;
+        metric.activeOnsets.push(onset);
+        metric.pitches.push(...voicePitches);
+        metric.representativePitches.push(Math.min(...voicePitches));
+        if (Math.min(...voicePitches) <= lowest + 1) metric.lowest++;
+        if (Math.min(...voicePitches) <= bottomCut + 2) metric.bottomBand++;
+      });
+    });
+
+    const totalOnsets = onsets.length;
+    const ensemblePitches = events.map(event => event.concertMidiNumber).sort((a,b)=>a-b);
+    const ensembleMedian = ensemblePitches.length ? ensemblePitches[Math.floor(ensemblePitches.length / 2)] : 60;
+    const ranked = voices.filter(voice => Number(voice.noteCount) > 0).map(voice => {
+      const metric = metrics.get(voice.voiceKey) || {active:0,lowest:0,bottomBand:0,pitches:[],representativePitches:[],activeOnsets:[]};
+      const activeShare = metric.active / totalOnsets;
+      const lowestShare = metric.lowest / totalOnsets;
+      const bottomShare = metric.bottomBand / totalOnsets;
+      const median = metric.pitches.length
+        ? [...metric.pitches].sort((a,b)=>a-b)[Math.floor(metric.pitches.length / 2)] : ensembleMedian;
+      const lowRegister = Math.max(0, Math.min(1, (ensembleMedian - median + 2) / 18));
+      const chronologicalPitches = metric.representativePitches;
+      const intervals = chronologicalPitches.slice(1).map((pitch,index)=>Math.abs(pitch-chronologicalPitches[index]));
+      const movement = intervals.length
+        ? Math.min(1, intervals.filter(interval => interval > 0 && interval <= 12).length / intervals.length) : 0;
+      const support = voice.roleSupportScores || {};
+      const evidence = voice.roleEvidence || {};
+      const baseBass = Number(support['ベース候補'] ?? voice.candidateScores?.['ベース候補'] ?? 0);
+      const melodyScore = Math.max(
+        Number(voice.candidateScores?.['主旋律候補']) || 0,
+        Number(support['主旋律候補']) || 0,
+        Number(voice.melodyScore) ? Number(voice.melodyScore) / 100 : 0
+      );
+      const strongestOther = Math.max(0, ...Object.entries(support)
+        .filter(([role]) => role !== 'ベース候補' && role !== '主旋律候補')
+        .map(([,score]) => Number(score) || 0));
+      const isMelody = (voice.roles || []).includes('主旋律候補') ||
+        voice.status === 'melody-phrase-bridged' || voice.melodyPhraseContinuity === true;
+      // 音域だけで決めず、持続音を含む最低音・低音域滞在・発音継続・既存根拠を統合。
+      // 四分音符など短い音価でも、発音の連続性があれば候補に残す。
+      const structural =
+        0.30 * lowestShare +
+        0.17 * bottomShare +
+        0.14 * activeShare +
+        0.14 * lowRegister +
+        0.13 * movement +
+        0.12 * baseBass;
+      const bass = Math.max(baseBass, Math.min(0.92, structural));
+      return {voice, bass, baseBass, lowestShare, bottomShare, activeShare,
+        lowRegister, movement, melodyScore, strongestOther, isMelody,
+        lowPosition: Number(evidence.lowPositionRatio) || 0};
+    })
+      // 明確な旋律声部は保護。ただし低音楽器という理由だけでは除外しない。
+      .filter(item => !(item.isMelody && item.melodyScore >= 0.50))
+      .filter(item => item.activeShare >= 0.20 && item.bass >= 0.40)
+      .filter(item => item.lowestShare >= 0.08 || item.bottomShare >= 0.28 ||
+        (item.lowRegister >= 0.45 && item.activeShare >= 0.45))
+      .filter(item => item.strongestOther < item.bass + 0.12)
+      .sort((a,b) => b.bass - a.bass);
+
+    const currentBass = voices.filter(voice => (voice.roles || []).includes('ベース候補'));
+    const best = ranked[0];
+    if (!best) return;
+
+    // 既存ベースがない場合は最有力声部を採用。複数パートが同じ低音ラインを
+    // オクターブ等で重ねている場合は、十分近い根拠の声部もベースとして保持する。
+    if (!currentBass.length) {
+      const selected = ranked.filter(item => item.bass >= Math.max(0.48, best.bass - 0.10)).slice(0, 4);
+      selected.forEach(item => {
+        item.voice.roles = ['ベース候補'];
+        item.voice.candidateScores = {...(item.voice.candidateScores || {}), 'ベース候補': Math.max(0.58, item.bass)};
+        item.voice.status = 'bass-role-recovered';
+        item.voice.reason = '持続音を含む同時発音・最低音担当・低音域での継続・音の動き・既存の音楽的根拠を全声部で再評価';
+        item.voice.bassRecoveryEvidence = {
+          lowestShare: item.lowestShare,
+          bottomShare: item.bottomShare,
+          activeShare: item.activeShare,
+          lowRegister: item.lowRegister,
+          movement: item.movement,
+          score: item.bass
+        };
+      });
+      return;
+    }
+
+    // 既存ベースの根拠が弱いときだけ、より強い構造的候補へ変更する。
+    const existingQuality = Math.max(...currentBass.map(voice => {
+      const item = ranked.find(candidate => candidate.voice.voiceKey === voice.voiceKey);
+      return item ? item.bass : Number(voice.roleSupportScores?.['ベース候補']) || 0;
+    }));
+    if (!currentBass.some(voice => voice.voiceKey === best.voice.voiceKey) &&
+        best.bass >= existingQuality + 0.16 && existingQuality < 0.44) {
+      currentBass.forEach(voice => {
+        voice.roles = (voice.roles || []).filter(role => role !== 'ベース候補');
+        voice.status = 'bass-role-reconsidered';
+      });
+      best.voice.roles = ['ベース候補'];
+      best.voice.candidateScores = {...(best.voice.candidateScores || {}), 'ベース候補': Math.max(0.58, best.bass)};
+      best.voice.status = 'bass-role-recovered';
+      best.voice.reason = '既存ベース候補より、持続音を含む最低音・低音域・発音継続の構造的根拠が強いため再判定';
+    }
+  });
+  return measureResults;
 }
 
 // 小節ごとに役割を分析する
 // 音の動きが少ない小節では、前後1小節を旋律の動きの参考にする。
 // ただし、音域・音符数などの基本特徴と同時演奏の分析は対象小節を中心に判定する。
-function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRoleResults) {
+function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRoleResults, globalPhraseAnalysis = null) {
   const measureIndexes = [...new Set(
     scoreTimeline.map(event => event.measureIndex)
   )].sort((a, b) => a - b);
@@ -3257,16 +4066,29 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
   const globalRoleMap = new Map(
     (globalRoleResults || []).map(part => [part.partId, part.roles || []])
   );
+  // 小節別に一度だけ索引化する。従来の全イベント走査を小節ごとに繰り返さず、
+  // 同じ対象小節・前後1小節のイベント集合をそのまま維持して処理量を削減する。
+  const eventsByMeasure = new Map();
+  scoreTimeline.forEach(event => {
+    if (!eventsByMeasure.has(event.measureIndex)) eventsByMeasure.set(event.measureIndex, []);
+    eventsByMeasure.get(event.measureIndex).push(event);
+  });
+  // 声部IDを全曲で一貫して使う。フレーズ類似は既存の全体解析を再利用し、
+  // match内のvoiceKeyで声部へ対応付けるため、重複した全曲解析を発生させない。
+  const toVoiceScopedEvent = event => {
+    const voiceKey = getScoreVoiceKey(event);
+    return { ...event, originalPartId: event.partId, partId: voiceKey, staff: "1", voice: "1" };
+  };
 
-  return measureIndexes.map(measureIndex => {
-    const measureEvents = scoreTimeline.filter(
-      event => event.measureIndex === measureIndex
-    );
+  const measureResults = measureIndexes.map(measureIndex => {
+    const measureEvents = eventsByMeasure.get(measureIndex) || [];
 
     // 前後の小節は、旋律の動きや対旋律の比較材料としてのみ利用する。
-    const contextEvents = scoreTimeline.filter(
-      event => Math.abs(event.measureIndex - measureIndex) <= 1
-    );
+    const contextEvents = [
+      ...(eventsByMeasure.get(measureIndex - 1) || []),
+      ...measureEvents,
+      ...(eventsByMeasure.get(measureIndex + 1) || [])
+    ];
 
     const localFeatures = analyzePartFeatures(measureEvents).map(part => {
       const globalFeature = globalFeatureMap.get(part.partId);
@@ -3286,10 +4108,14 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       measureNumber: measureEvents[0]?.measureNumber ?? String(measureIndex + 1)
     }));
 
-    const motionAnalysis = analyzeMelodicMotion(contextEvents);
+    // メロディ候補の根拠は、判定対象の小節内にある音符から作る。
+    // 前後小節を混ぜると、隣の小節で旋律を担当したパートが、
+    // 対象小節では長音・伴奏なのにメロディ候補として残ることがある。
+    // 小節をまたぐフレーズの関係は、下のphraseAnalysisによる照合で補う。
+    const localMotionAnalysis = analyzeMelodicMotion(measureEvents);
     const melodyCandidates = rankMelodyCandidates(
       localFeatures,
-      motionAnalysis
+      localMotionAnalysis
     );
 
     const simultaneousAnalysis = analyzeSimultaneousEvents(measureEvents);
@@ -3304,7 +4130,9 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       melodyCandidates,
       counterMelody,
       rhythmRelationships,
-      events: measureEvents
+      events: measureEvents,
+      phraseAnalysis: globalPhraseAnalysis,
+      globalRoleResults
     }).map(part => ({
       ...part,
       measureIndex,
@@ -3318,16 +4146,6 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
     const voiceIdToOriginal = new Map(
       localVoiceFeatures.map(voice => [voice.voiceKey, voice])
     );
-    const toVoiceScopedEvent = event => {
-      const voiceKey = getScoreVoiceKey(event);
-      return {
-        ...event,
-        originalPartId: event.partId,
-        partId: voiceKey,
-        staff: "1",
-        voice: "1"
-      };
-    };
     const voiceMeasureEvents = measureEvents.map(toVoiceScopedEvent);
     const voiceContextEvents = contextEvents.map(toVoiceScopedEvent);
 
@@ -3340,7 +4158,9 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
         inRangeRatio: parentFeature?.inRangeRatio ?? null
       };
     });
-    const voiceMotionAnalysis = analyzeMelodicMotion(voiceContextEvents);
+    // 声部単位でも、隣接小節の旋律輪郭を対象小節へ直接持ち込まない。
+    // 対象小節の音符だけで候補を作り、フレーズ継続はphraseAnalysis側で扱う。
+    const voiceMotionAnalysis = analyzeMelodicMotion(voiceMeasureEvents);
     const voiceMelodyCandidates = rankMelodyCandidates(
       voiceFeaturesForRoles,
       voiceMotionAnalysis
@@ -3355,7 +4175,8 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       melodyCandidates: voiceMelodyCandidates,
       counterMelody: voiceCounterMelody,
       rhythmRelationships: voiceRhythmRelationships,
-      events: voiceMeasureEvents
+      events: voiceMeasureEvents,
+      phraseAnalysis: globalPhraseAnalysis
     });
 
     const voiceRoleResults = localVoiceFeatures.map(voice => {
@@ -3373,6 +4194,12 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
         measureNumber: measureEvents[0]?.measureNumber ?? String(measureIndex + 1),
         roles: hasEnoughNotes ? detectedRoles : [],
         melodyScore: melody?.melodyScore ?? null,
+        // 無色の原因を「音符不足」と「候補スコア不足」に分けて追跡する。
+        noteCount: voice.noteCount,
+        restCount: voice.restCount,
+        candidateScores: classified?.candidateScores || {},
+        roleSupportScores: classified?.roleSupportScores || {},
+        roleEvidence: classified?.roleEvidence || {},
         status: hasEnoughNotes ? "voice-role-analyzed" : "insufficient-measure-data",
         reason: hasEnoughNotes
           ? "声部ごとの音域・音の動き・対旋律・リズム関係から独立判定"
@@ -3393,6 +4220,7 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       voiceRhythmRelationships
     };
   });
+  return reinforceBridgedMelodyMeasures(measureResults, scoreTimeline);
 }
 
 // パートの役割と音符の位置情報から色分けデータを作成
@@ -3435,6 +4263,8 @@ function createRoleAnnotationData() {
         getScoreVoiceKey(event) === voice.voiceKey &&
         event.measureIndex === measureResult.measureIndex &&
         !event.isRest &&
+        !event.isGrace &&
+        Number.isFinite(event.concertMidiNumber) &&
         event.imagePosition &&
         Number.isFinite(event.imagePosition.page) &&
         Number.isFinite(event.imagePosition.x) &&
@@ -3573,7 +4403,7 @@ function applyRoleAnnotationData() {
   return changedPages;
 }
 
-function detectMelodyHandoffs(events, melodyCandidates, measureResults = []) {
+function detectMelodyHandoffs(events, melodyCandidates, measureResults = [], phraseAnalysis = null) {
   // 小節内だけでなく、隣接する小節の境界でも旋律候補を比較する。
   // onsetBeats は小節ごとにリセットされるため、小節長から通しの拍位置を作る。
   const globalCandidateIds = new Set(
@@ -3593,20 +4423,8 @@ function detectMelodyHandoffs(events, melodyCandidates, measureResults = []) {
     if (ids.size) localCandidates.set(measure.measureIndex, ids);
   });
 
-  const measureLengths = new Map();
-  (events || []).forEach(event => {
-    if (!Number.isFinite(event.measureIndex) ||
-        !Number.isFinite(event.onsetBeats) ||
-        !Number.isFinite(event.durationBeats) || event.durationBeats <= 0) return;
-    const end = event.onsetBeats + event.durationBeats;
-    measureLengths.set(event.measureIndex, Math.max(measureLengths.get(event.measureIndex) || 0, end));
-  });
-  const measureOffsets = new Map();
-  let runningOffset = 0;
-  [...measureLengths.keys()].sort((a, b) => a - b).forEach(index => {
-    measureOffsets.set(index, runningOffset);
-    runningOffset += measureLengths.get(index) || 0;
-  });
+  const measureTimeline = buildMeasureBeatOffsets(events);
+  const measureOffsets = measureTimeline.offsets;
 
   const notesByMeasure = new Map();
   (events || []).forEach(event => {
@@ -3693,10 +4511,46 @@ function detectMelodyHandoffs(events, melodyCandidates, measureResults = []) {
     ));
   }
 
+  // フレーズ全体が別パートへ引き継がれるケースを追加検出する。
+  // 近接して同じ/類似フレーズを演奏するだけの同時ユニゾンは受け渡しにしない。
+  const handoffPhraseAnalysis = phraseAnalysis || analyzePhraseRelationships(events || []);
+  (handoffPhraseAnalysis.matches || []).forEach(match => {
+    if (match.samePart || match.similarity < 0.84) return;
+    const aStart = match.startGlobalBeatA, aEnd = match.endGlobalBeatA;
+    const bStart = match.startGlobalBeatB, bEnd = match.endGlobalBeatB;
+    if (![aStart,aEnd,bStart,bEnd].every(Number.isFinite)) return;
+    let outgoingId, incomingId, outgoingEnd, incomingStart, displayMeasure;
+    if (bStart >= aEnd - 0.1 && bStart - aEnd <= 1.5) {
+      outgoingId = match.partAId; incomingId = match.partBId;
+      outgoingEnd = aEnd; incomingStart = bStart;
+      displayMeasure = match.measureB;
+    } else if (aStart >= bEnd - 0.1 && aStart - bEnd <= 1.5) {
+      outgoingId = match.partBId; incomingId = match.partAId;
+      outgoingEnd = bEnd; incomingStart = aStart;
+      displayMeasure = match.measureA;
+    } else return;
+    const key = `phrase:${outgoingId}|${incomingId}|${outgoingEnd.toFixed(3)}|${incomingStart.toFixed(3)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    handoffs.push({
+      measureIndex: displayMeasure,
+      measureNumber: displayMeasure + 1,
+      fromPartId: outgoingId,
+      toPartId: incomingId,
+      fromPitch: null,
+      toPitch: null,
+      timeDifference: incomingStart - outgoingEnd,
+      pitchDifference: null,
+      confidence: match.similarity >= 0.92 ? "フレーズ一致による有力候補" : "フレーズ類似による候補",
+      crossesMeasure: match.measureA !== match.measureB || match.measureAEnd !== match.measureBEnd,
+      phraseSimilarity: match.similarity
+    });
+  });
+
   return handoffs.sort((a, b) =>
     a.measureIndex - b.measureIndex ||
     a.timeDifference - b.timeDifference ||
-    a.pitchDifference - b.pitchDifference
+    (a.pitchDifference ?? 99) - (b.pitchDifference ?? 99)
   );
 }
 

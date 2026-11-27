@@ -641,11 +641,6 @@ if (scoreFileInput) {
       return;
     }
     
-    // 新しい楽譜では、最初の描画を全ページ対象にする。
-    // 前の楽譜のページ署名も引き継がない。
-    window.scoreAnnotationRenderInitialized = false;
-    window.scoreRenderedAnnotationSignatures = new Map();
-
     // ファイルを履歴用に保存
     try {
       const projectId = crypto.randomUUID();
@@ -1359,69 +1354,6 @@ function createScoreTimeline(scoreData) {
   return events;
 }
 
-// MusicXMLのパート・五線・声部番号から、独立した声部を識別する
-function getScoreVoiceKey(event) {
-  return [
-    event.partId ?? "unknown-part",
-    event.staff ?? "1",
-    event.voice ?? "1"
-  ].join("::");
-}
-
-// 声部ごとの基本情報を作成する。既存のパート単位分析は変更せず、
-// 声部を独立して追跡できる情報を追加する。
-function analyzeVoiceFeatures(events) {
-  const voices = new Map();
-
-  events.forEach(event => {
-    const voiceKey = getScoreVoiceKey(event);
-
-    if (!voices.has(voiceKey)) {
-      voices.set(voiceKey, {
-        voiceKey,
-        partId: event.partId,
-        partName: event.partName,
-        instrument: event.instrument,
-        staff: String(event.staff ?? "1"),
-        voice: String(event.voice ?? "1"),
-        events: []
-      });
-    }
-
-    voices.get(voiceKey).events.push(event);
-  });
-
-  return Array.from(voices.values()).map(voice => {
-    const notes = voice.events.filter(event =>
-      !event.isRest &&
-      !event.isGrace &&
-      Number.isFinite(event.concertMidiNumber)
-    );
-    const pitches = notes.map(event => event.concertMidiNumber);
-    const measureIndexes = [...new Set(
-      voice.events.map(event => event.measureIndex)
-    )];
-
-    return {
-      voiceKey: voice.voiceKey,
-      partId: voice.partId,
-      partName: voice.partName,
-      instrument: voice.instrument,
-      staff: voice.staff,
-      voice: voice.voice,
-      noteCount: notes.length,
-      restCount: voice.events.filter(event => event.isRest).length,
-      measureCount: measureIndexes.length,
-      minPitch: pitches.length ? Math.min(...pitches) : null,
-      maxPitch: pitches.length ? Math.max(...pitches) : null,
-      averagePitch: pitches.length
-        ? pitches.reduce((sum, pitch) => sum + pitch, 0) / pitches.length
-        : null,
-      events: voice.events
-    };
-  });
-}
-
 // 同時演奏の分析
 function analyzeSimultaneousEvents(events) {
   const groups = new Map();
@@ -1597,7 +1529,11 @@ function analyzeMelodicMotion(events) {
       return;
     }
 
-    const voiceKey = getScoreVoiceKey(event);
+    const voiceKey = [
+      event.partId,
+      event.staff ?? "default",
+      event.voice ?? "default"
+    ].join("_");
 
     if (!voices.has(voiceKey)) {
       voices.set(voiceKey, []);
@@ -2115,11 +2051,9 @@ function analyzeMelodyOverlapRoles(overlappingAnalysis, melodyCandidates) {
 }
 
 // MusicXMLの分析を実行する関数
-function runMusicXMLAnalysis({ provisional = false } = {}) {
+function runMusicXMLAnalysis() {
 
   console.time("MusicXML分析全体");
-  const previousAnalysisStatus = window.scoreAnalysisStatus || "none";
-  window.scoreAnalysisStatus = provisional ? "provisional" : "final";
 
   resetScoreAnalysisDisplay();
 
@@ -2132,20 +2066,6 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
   // 全パートの時間軸データを作成
   window.scoreTimeline =
     createScoreTimeline(musicXmlScoreData);
-
-  // 声部をパート・五線・声部番号ごとに識別する
-  window.voiceFeatures =
-    analyzeVoiceFeatures(window.scoreTimeline);
-
-  console.log("声部識別結果:", window.voiceFeatures.map(voice => ({
-    voiceKey: voice.voiceKey,
-    partName: voice.partName,
-    staff: voice.staff,
-    voice: voice.voice,
-    noteCount: voice.noteCount,
-    restCount: voice.restCount,
-    measureCount: voice.measureCount
-  })));
 
   // 同時演奏を分析
   window.simultaneousAnalysis =
@@ -2244,29 +2164,6 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
   );
 
   console.log("小節ごとの役割分析結果:", window.measureRoleResults);
-  console.log("小節ごとの声部分析結果:", (window.measureRoleResults || []).map(measure => ({
-    measureNumber: measure.measureNumber,
-    voices: (measure.voiceFeatures || []).map(voice => ({
-      partName: voice.partName,
-      staff: voice.staff,
-      voice: voice.voice,
-      noteCount: voice.noteCount,
-      restCount: voice.restCount,
-      minPitch: voice.minPitch,
-      maxPitch: voice.maxPitch
-    }))
-  })));
-  console.log("小節ごとの声部役割候補:", (window.measureRoleResults || []).map(measure => ({
-    measureNumber: measure.measureNumber,
-    voices: (measure.voiceRoleResults || []).map(voice => ({
-      partName: voice.partName,
-      staff: voice.staff,
-      voice: voice.voice,
-      roles: voice.roles,
-      status: voice.status,
-      reason: voice.reason
-    }))
-  })));
   console.log("役割分析結果（生成後）:", window.partRoleResults);
   console.log("主旋律候補:", window.melodyCandidates);
   console.log("対旋律分析:", window.counterMelodyAnalysis);
@@ -2275,16 +2172,9 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
   window.scoreRoleAnnotations =
     createRoleAnnotationData();
 
-  // 仮判定・最終判定のどちらも、最新の注釈データで置き換える。
-  // applyRoleAnnotationData は変更があったページだけを返す。
-  const changedAnnotationPages = applyRoleAnnotationData();
-  window.scoreAnalysisRevision = (window.scoreAnalysisRevision || 0) + 1;
-  console.log("分析判定状態:", {
-    status: window.scoreAnalysisStatus,
-    previousStatus: previousAnalysisStatus,
-    revision: window.scoreAnalysisRevision,
-    changedPages: changedAnnotationPages
-  });
+  // 生成した役割注釈を描画用レイヤーへ登録する。
+  // この呼び出しがないと、分析結果があってもscoreAnnotationsが空のままになる。
+  applyRoleAnnotationData();
 
   console.log("[マーカー登録診断]", Object.fromEntries(
     Object.entries(scoreAnnotations).map(([name, items]) => [name, items.length])
@@ -2316,16 +2206,11 @@ function runMusicXMLAnalysis({ provisional = false } = {}) {
     handoffCount: window.scoreAnalysisResult?.handoffDisplayData?.length
   });
 
-  // マーカーに変更があったページだけ再描画する。
-  // 古いマーカーの削除も、該当ページのcanvasをクリアしてから描き直すことで反映する。
-  const changedPageSet = new Set(changedAnnotationPages);
+  // PDFの各ページに分析結果を再描画
   const scorePages = document.querySelectorAll(".pdf-page");
 
   scorePages.forEach((pageContainer, index) => {
-    const pageNumber = index + 1;
-    if (changedPageSet.has(pageNumber)) {
-      renderScoreAnnotations(pageNumber, pageContainer);
-    }
+    renderScoreAnnotations(index + 1, pageContainer);
   });
 
   console.log("MusicXML解析結果:", musicXmlScoreData);
@@ -3167,15 +3052,6 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       };
     });
 
-    // 小節内の声部情報も独立して保持する。
-    // 役割判定は既存のパート単位ロジックを維持し、次段階で声部単位へ
-    // 細分化できるように、音符数・音域・休符数を小節ごとに記録する。
-    const localVoiceFeatures = analyzeVoiceFeatures(measureEvents).map(voice => ({
-      ...voice,
-      measureIndex,
-      measureNumber: measureEvents[0]?.measureNumber ?? String(measureIndex + 1)
-    }));
-
     const motionAnalysis = analyzeMelodicMotion(contextEvents);
     const melodyCandidates = rankMelodyCandidates(
       localFeatures,
@@ -3202,83 +3078,12 @@ function analyzeMeasureRoleResults(scoreTimeline, globalPartFeatures, globalRole
       globalReferenceRoles: globalRoleMap.get(part.partId) || []
     }));
 
-    // 声部ごとに独立した特徴量を作り、声部単位で役割候補を判定する。
-    // 分析用にだけpartIdを声部キーへ置き換え、元のpartIdは結果に戻す。
-    const voiceIdToOriginal = new Map(
-      localVoiceFeatures.map(voice => [voice.voiceKey, voice])
-    );
-    const toVoiceScopedEvent = event => {
-      const voiceKey = getScoreVoiceKey(event);
-      return {
-        ...event,
-        originalPartId: event.partId,
-        partId: voiceKey,
-        staff: "1",
-        voice: "1"
-      };
-    };
-    const voiceMeasureEvents = measureEvents.map(toVoiceScopedEvent);
-    const voiceContextEvents = contextEvents.map(toVoiceScopedEvent);
-
-    const voiceFeaturesForRoles = analyzePartFeatures(voiceMeasureEvents).map(feature => {
-      const original = voiceIdToOriginal.get(feature.partId);
-      const parentFeature = globalFeatureMap.get(original?.partId);
-      return {
-        ...feature,
-        instrumentRange: parentFeature?.instrumentRange ?? null,
-        inRangeRatio: parentFeature?.inRangeRatio ?? null
-      };
-    });
-    const voiceMotionAnalysis = analyzeMelodicMotion(voiceContextEvents);
-    const voiceMelodyCandidates = rankMelodyCandidates(
-      voiceFeaturesForRoles,
-      voiceMotionAnalysis
-    );
-    const voiceCounterMelody = analyzeCounterMelodyCandidates(
-      voiceContextEvents,
-      voiceMelodyCandidates
-    );
-    const voiceRhythmRelationships = analyzeRhythmRelationships(voiceMeasureEvents);
-    const classifiedVoiceRoles = classifyPartRoles({
-      partFeatures: voiceFeaturesForRoles,
-      melodyCandidates: voiceMelodyCandidates,
-      counterMelody: voiceCounterMelody,
-      rhythmRelationships: voiceRhythmRelationships
-    });
-
-    const voiceRoleResults = localVoiceFeatures.map(voice => {
-      const classified = classifiedVoiceRoles.find(item => item.partId === voice.voiceKey);
-      const melody = voiceMelodyCandidates.find(item => item.partId === voice.voiceKey);
-      const hasEnoughNotes = voice.noteCount >= 2;
-      const detectedRoles = classified?.roles || [];
-      return {
-        voiceKey: voice.voiceKey,
-        partId: voice.partId,
-        partName: voice.partName,
-        staff: voice.staff,
-        voice: voice.voice,
-        measureIndex,
-        measureNumber: measureEvents[0]?.measureNumber ?? String(measureIndex + 1),
-        roles: hasEnoughNotes ? detectedRoles : [],
-        melodyScore: melody?.melodyScore ?? null,
-        status: hasEnoughNotes ? "voice-role-analyzed" : "insufficient-measure-data",
-        reason: hasEnoughNotes
-          ? "声部ごとの音域・音の動き・対旋律・リズム関係から独立判定"
-          : "この小節の音符情報が少ないため、役割を確定せず保留"
-      };
-    });
-
     return {
       measureIndex,
       measureNumber: measureEvents[0]?.measureNumber ?? String(measureIndex + 1),
       roles,
       melodyCandidates,
-      simultaneousAnalysis,
-      voiceFeatures: localVoiceFeatures,
-      voiceRoleResults,
-      voiceMelodyCandidates,
-      voiceCounterMelody,
-      voiceRhythmRelationships
+      simultaneousAnalysis
     };
   });
 }
@@ -3302,25 +3107,17 @@ function createRoleAnnotationData() {
   const annotations = [];
 
   measureResults.forEach(measureResult => {
-    const voiceResults = measureResult.voiceRoleResults || [];
-    const voicesByPart = new Map();
-    voiceResults.forEach(voice => {
-      if (!voicesByPart.has(voice.partId)) voicesByPart.set(voice.partId, []);
-      voicesByPart.get(voice.partId).push(voice);
-    });
+    measureResult.roles.forEach(part => {
+      if (!part.roles || !part.roles.length) return;
 
-    // 声部単位の判定を優先してマーカーへ反映する。
-    // 複数声部のパートで判定保留になった声部は、パート全体の役割を
-    // 安易に流用せず無色のままにする。
-    voiceResults.forEach(voice => {
-      const roles = voice.roles || [];
-      if (!roles.length) return;
-      const layers = roles.map(role => roleLayerMap[role]).filter(Boolean);
+      const layers = part.roles
+        .map(role => roleLayerMap[role])
+        .filter(Boolean);
+
       if (!layers.length) return;
 
-      const voiceEvents = events.filter(event =>
-        event.partId === voice.partId &&
-        getScoreVoiceKey(event) === voice.voiceKey &&
+      const partEvents = events.filter(event =>
+        event.partId === part.partId &&
         event.measureIndex === measureResult.measureIndex &&
         !event.isRest &&
         event.imagePosition &&
@@ -3329,15 +3126,15 @@ function createRoleAnnotationData() {
         Number.isFinite(event.imagePosition.y)
       );
 
-      voiceEvents.forEach(event => {
+      partEvents.forEach(event => {
         layers.forEach(layerName => {
           const layer = analysisLayers[layerName];
           if (!layer || !scoreAnnotations[layerName]) return;
+
           annotations.push({
             layerName,
             color: layer.color,
             partId: event.partId,
-            voiceKey: voice.voiceKey,
             measureIndex: event.measureIndex,
             page: event.imagePosition.page,
             x: event.imagePosition.x,
@@ -3347,33 +3144,6 @@ function createRoleAnnotationData() {
           });
         });
       });
-    });
-
-    // 声部情報が取得できない単一声部パートに限り、従来のパート判定へ戻す。
-    measureResult.roles.forEach(part => {
-      const partVoices = voicesByPart.get(part.partId) || [];
-      if (partVoices.length > 1 || partVoices.length === 1) return;
-      if (!part.roles || !part.roles.length) return;
-      const layers = part.roles.map(role => roleLayerMap[role]).filter(Boolean);
-      if (!layers.length) return;
-      const partEvents = events.filter(event =>
-        event.partId === part.partId &&
-        event.measureIndex === measureResult.measureIndex &&
-        !event.isRest && event.imagePosition &&
-        Number.isFinite(event.imagePosition.page) &&
-        Number.isFinite(event.imagePosition.x) &&
-        Number.isFinite(event.imagePosition.y)
-      );
-      partEvents.forEach(event => layers.forEach(layerName => {
-        const layer = analysisLayers[layerName];
-        if (!layer || !scoreAnnotations[layerName]) return;
-        annotations.push({
-          layerName, color: layer.color, partId: event.partId,
-          measureIndex: event.measureIndex, page: event.imagePosition.page,
-          x: event.imagePosition.x, y: event.imagePosition.y,
-          noteName: event.noteName, measureNumber: event.measureNumber
-        });
-      }));
     });
   });
 
@@ -3394,39 +3164,30 @@ function createRoleAnnotationData() {
 // 役割ごとの色分けデータを表示用レイヤーに登録
 function applyRoleAnnotationData() {
   const annotations = window.scoreRoleAnnotations || [];
+
   const roleLayers = [
-    "melody", "harmony", "countermelody", "countermelody2",
-    "bass", "accompaniment", "rhythm"
+    "melody",
+    "harmony",
+    "countermelody",
+    "countermelody2",
+    "bass",
+    "accompaniment",
+    "rhythm"
   ];
 
-  // 前回「実際に描画した」注釈の署名を保持しておく。
-  // createRoleAnnotationData() は scoreAnnotations を先に作り直すため、
-  // scoreAnnotations から前回値を取得すると新旧比較にならない。
-  const previousSignatures = window.scoreRenderedAnnotationSignatures instanceof Map
-    ? window.scoreRenderedAnnotationSignatures
-    : new Map();
-
-  const nextSignatures = new Map();
-  annotations.forEach(item => {
-    const page = Number(item.page);
-    if (!Number.isFinite(page)) return;
-    if (!nextSignatures.has(page)) nextSignatures.set(page, []);
-    nextSignatures.get(page).push(
-      `${item.layerName}|${item.partId}|${item.voiceKey || ""}|${item.measureIndex}|${item.x}|${item.y}`
-    );
-  });
-  nextSignatures.forEach((items, page) => {
-    nextSignatures.set(page, items.sort().join("\n"));
-  });
-
-  // 表示用レイヤーを最新の判定結果で置き換える。
+  // 役割レイヤーの古いデータをクリア
   roleLayers.forEach(layerName => {
-    if (scoreAnnotations[layerName]) scoreAnnotations[layerName] = [];
+    if (scoreAnnotations[layerName]) {
+      scoreAnnotations[layerName] = [];
+    }
   });
 
+  // 新しい色分けデータを登録
   annotations.forEach(annotation => {
     const layerName = annotation.layerName;
+
     if (!scoreAnnotations[layerName]) return;
+
     addScoreAnnotation(layerName, {
       page: annotation.page,
       partId: annotation.partId,
@@ -3436,143 +3197,84 @@ function applyRoleAnnotationData() {
       text: ""
     });
   });
-
-  const allPages = new Set([
-    ...previousSignatures.keys(),
-    ...nextSignatures.keys()
-  ]);
-  const changedPages = [...allPages].filter(page =>
-    previousSignatures.get(page) !== nextSignatures.get(page)
-  ).sort((a, b) => a - b);
-
-  // 初回は、マーカーが0件のページも含めて全ページを描画対象にする。
-  if (!window.scoreAnnotationRenderInitialized) {
-    document.querySelectorAll(".pdf-page").forEach((_, index) => {
-      const pageNumber = index + 1;
-      if (!changedPages.includes(pageNumber)) changedPages.push(pageNumber);
-    });
-    changedPages.sort((a, b) => a - b);
-    window.scoreAnnotationRenderInitialized = true;
-  }
-
-  // 今回の署名は、描画対象ページの再描画が完了した後に確定する。
-  // 呼び出し元がこのMapを使って再描画する。
-  window.scoreRenderedAnnotationSignatures = nextSignatures;
-  return changedPages;
 }
 
 function detectMelodyHandoffs(events, melodyCandidates) {
-  // 全体分析で主旋律候補になったパートだけを対象にする。
-  // 同じパート内の音符同士や、単なる同時演奏を受け渡しと誤認しないよう、
-  // 小節ごとに各パートの「最後の音」と「最初の音」を比較する。
   const candidateIds = new Set(
     (melodyCandidates || [])
       .filter(item => item.candidate)
       .map(item => item.partId)
   );
 
-  if (candidateIds.size < 2) return [];
-
-  const notesByMeasure = new Map();
-  (events || []).forEach(event => {
-    if (
-      event.isRest ||
-      event.isGrace ||
-      !candidateIds.has(event.partId) ||
-      !Number.isFinite(event.concertMidiNumber) ||
-      !Number.isFinite(event.onsetBeats) ||
-      !Number.isFinite(event.durationBeats) ||
-      event.durationBeats <= 0
-    ) return;
-
-    const measureKey = `${event.measureIndex}`;
-    if (!notesByMeasure.has(measureKey)) {
-      notesByMeasure.set(measureKey, new Map());
-    }
-    const byPart = notesByMeasure.get(measureKey);
-    if (!byPart.has(event.partId)) byPart.set(event.partId, []);
-    byPart.get(event.partId).push(event);
-  });
+  const notes = (events || [])
+    .filter(event =>
+      !event.isRest &&
+      !event.isGrace &&
+      candidateIds.has(event.partId) &&
+      Number.isFinite(event.concertMidiNumber) &&
+      Number.isFinite(event.onsetBeats) &&
+      Number.isFinite(event.durationBeats)
+    )
+    .sort((a, b) =>
+      a.measureIndex - b.measureIndex ||
+      a.onsetBeats - b.onsetBeats
+    );
 
   const handoffs = [];
   const handoffKeys = new Set();
-  const maxGapBeats = 1;
-  const maxOverlapBeats = 0.1;
-  const maxPitchDifference = 7;
 
-  notesByMeasure.forEach((byPart, measureKey) => {
-    const partSummaries = [...byPart.entries()].map(([partId, partEvents]) => {
-      const sorted = partEvents.slice().sort((a, b) =>
-        a.onsetBeats - b.onsetBeats ||
-        a.concertMidiNumber - b.concertMidiNumber
-      );
-      const firstNote = sorted[0];
-      const lastEnd = Math.max(...sorted.map(event =>
-        event.onsetBeats + event.durationBeats
-      ));
-      const lastNotes = sorted.filter(event =>
-        Math.abs((event.onsetBeats + event.durationBeats) - lastEnd) < 0.0001
-      );
+  for (let i = 0; i < notes.length; i++) {
+    const current = notes[i];
 
-      return { partId, firstNote, lastNotes, lastEnd };
-    });
+    const currentEnd =
+      current.onsetBeats + current.durationBeats;
 
-    partSummaries.forEach(outgoing => {
-      partSummaries.forEach(incoming => {
-        if (outgoing.partId === incoming.partId) return;
+    const next = notes.find(event =>
+      event.measureIndex === current.measureIndex &&
+      event.partId !== current.partId &&
+      event.onsetBeats >= currentEnd &&
+      event.onsetBeats - currentEnd <= 1
+    );
 
-        const timeDifference =
-          incoming.firstNote.onsetBeats - outgoing.lastEnd;
+    if (!next) continue;
 
-        // ごく短い重なりは演奏上の受け渡しとして許容するが、
-        // 大きく重なる場合は別旋律の同時演奏とみなして除外する。
-        if (
-          timeDifference < -maxOverlapBeats ||
-          timeDifference > maxGapBeats
-        ) return;
+    const pitchDifference = Math.abs(
+      next.concertMidiNumber - current.concertMidiNumber
+    );
 
-        const pitchPairs = outgoing.lastNotes.map(fromNote => ({
-          fromNote,
-          pitchDifference: Math.abs(
-            incoming.firstNote.concertMidiNumber - fromNote.concertMidiNumber
-          )
-        })).sort((a, b) => a.pitchDifference - b.pitchDifference);
+    const timeDifference =
+      next.onsetBeats - currentEnd;
 
-        const closestPair = pitchPairs[0];
-        if (!closestPair || closestPair.pitchDifference > maxPitchDifference) {
-          return;
-        }
+    if (pitchDifference <= 7) {
+      const handoffKey = [
+        current.measureIndex,
+        current.partId,
+        next.partId,
+        current.onsetBeats,
+        next.onsetBeats
+      ].join("_");
 
-        const handoffKey = [
-          measureKey,
-          outgoing.partId,
-          incoming.partId,
-          outgoing.lastEnd,
-          incoming.firstNote.onsetBeats
-        ].join('_');
-        if (handoffKeys.has(handoffKey)) return;
-        handoffKeys.add(handoffKey);
+      if (handoffKeys.has(handoffKey)) {
+        continue;
+      }
 
-        handoffs.push({
-          measureIndex: Number(measureKey),
-          measureNumber: closestPair.fromNote.measureNumber || incoming.firstNote.measureNumber,
-          fromPartId: outgoing.partId,
-          toPartId: incoming.partId,
-          fromPitch: closestPair.fromNote.concertMidiNumber,
-          toPitch: incoming.firstNote.concertMidiNumber,
-          timeDifference,
-          pitchDifference: closestPair.pitchDifference,
-          confidence: timeDifference >= 0 ? "候補" : "重なりを含む候補"
-        });
+      handoffKeys.add(handoffKey);
+
+      handoffs.push({
+        measureIndex: current.measureIndex,
+        measureNumber: current.measureNumber,
+        fromPartId: current.partId,
+        toPartId: next.partId,
+        fromPitch: current.concertMidiNumber,
+        toPitch: next.concertMidiNumber,
+        timeDifference,
+        pitchDifference,
+        confidence: "候補"
       });
-    });
-  });
+    }
+  }
 
-  return handoffs.sort((a, b) =>
-    a.measureIndex - b.measureIndex ||
-    a.timeDifference - b.timeDifference ||
-    a.pitchDifference - b.pitchDifference
-  );
+  return handoffs;
 }
 
 function createHandoffDisplayData(handoffs, parts) {
@@ -3800,7 +3502,6 @@ function resetScoreAnalysisDisplay() {
   window.melodyHandoffs = [];
   window.handoffDisplayData = [];
   window.scoreAnalysisResult = null;
-  window.scoreAnalysisStatus = "none";
 }
 
 // 分析画面を開いたときに分析結果を再表示
@@ -3880,7 +3581,7 @@ setAnalysisProgress("楽譜を読み込んでいます…");
 try {
 
   const { recognizeScoreFiles } =
-    await import("./engine/score-compass-engine.js");
+    await import("../engine/score-compass-engine.js");
 
   console.time("① OMR認識");
 
@@ -3894,7 +3595,7 @@ try {
       // Analyze it immediately so already-read pages can receive provisional markers.
       try {
         musicXmlScoreData = parseMusicXML(partialXml);
-        runMusicXMLAnalysis({ provisional: true });
+        runMusicXMLAnalysis();
         console.log(
           `ページ ${pageIndex + 1}/${total} までの暫定分析を表示しました。`
         );
@@ -3923,7 +3624,7 @@ try {
 
   console.time("③ MusicXML分析");
 
-  runMusicXMLAnalysis({ provisional: false });
+  runMusicXMLAnalysis();
 
   console.timeEnd("③ MusicXML分析");
 
